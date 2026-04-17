@@ -102,7 +102,11 @@
     }
 
     function getFirstUnfinishedStep(statuses = {}) {
-      for (let step = 1; step <= 9; step++) {
+      const stepIds = Object.keys(DEFAULT_STATE.stepStatuses || {})
+        .map((step) => Number(step))
+        .filter(Number.isFinite)
+        .sort((left, right) => left - right);
+      for (const step of stepIds) {
         if (!isStepDoneStatus(statuses[step] || 'pending')) {
           return step;
         }

@@ -78,7 +78,7 @@
       }
 
       return {
-        filterAfterTimestamp: getHotmailVerificationRequestTimestamp(7, state),
+        filterAfterTimestamp: getHotmailVerificationRequestTimestamp(8, state),
         senderFilters: ['openai', 'noreply', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward'],
         subjectFilters: ['verify', 'verification', 'code', '验证码', 'confirm', 'login'],
         targetEmail: state.email,
@@ -116,7 +116,7 @@
       if (step === 4) {
         await setState({ signupVerificationRequestedAt: requestedAt });
       }
-      if (step === 7) {
+      if (step === 8) {
         await setState({ loginVerificationRequestedAt: requestedAt });
       }
 
@@ -391,7 +391,7 @@
       let lastResendAt = Number(options.lastResendAt) || 0;
 
       const updateFilterAfterTimestampForVerificationStep = async (requestedAt) => {
-        if ((step !== 4 && step !== 7) || !requestedAt) {
+        if ((step !== 4 && step !== 8) || !requestedAt) {
           return nextFilterAfterTimestamp;
         }
 

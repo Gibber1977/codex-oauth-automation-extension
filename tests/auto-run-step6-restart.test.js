@@ -61,15 +61,17 @@ const bundle = [
 
 function createHarness(options = {}) {
   const {
-    startStep = 6,
-    failureStep = 9,
+    startStep = 7,
+    failureStep = 10,
     failureBudget = 1,
     failureMessage = '认证失败: Request failed with status code 502',
     authState = { state: 'password_page', url: 'https://auth.openai.com/log-in' },
   } = options;
 
   return new Function(`
-const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 };
+const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 };
+const LAST_STEP_ID = 10;
+const FINAL_OAUTH_CHAIN_START_STEP = 7;
 const LOG_PREFIX = '[test]';
 const chrome = {
   tabs: {
@@ -157,9 +159,9 @@ return {
 `)();
 }
 
-test('auto-run keeps restarting from step 6 after post-login failures without a hard cap', async () => {
+test('auto-run keeps restarting from step 7 after post-login failures without a hard cap', async () => {
   const harness = createHarness({
-    failureStep: 9,
+    failureStep: 10,
     failureBudget: 6,
     failureMessage: '认证失败: Request failed with status code 502',
     authState: { state: 'password_page', url: 'https://auth.openai.com/log-in' },
@@ -171,23 +173,23 @@ test('auto-run keeps restarting from step 6 after post-login failures without a 
   assert.deepStrictEqual(
     events.steps,
     [
-      6, 7, 8, 9,
-      6, 7, 8, 9,
-      6, 7, 8, 9,
-      6, 7, 8, 9,
-      6, 7, 8, 9,
-      6, 7, 8, 9,
-      6, 7, 8, 9,
+      7, 8, 9, 10,
+      7, 8, 9, 10,
+      7, 8, 9, 10,
+      7, 8, 9, 10,
+      7, 8, 9, 10,
+      7, 8, 9, 10,
+      7, 8, 9, 10,
     ]
   );
-  assert.ok(events.logs.some(({ message }) => /回到步骤 6 重新开始授权流程/.test(message)));
+  assert.ok(events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
 });
 
 test('auto-run stops restarting once add-phone is detected', async () => {
   const harness = createHarness({
-    failureStep: 6,
+    failureStep: 7,
     failureBudget: 1,
-    failureMessage: '当前页面已进入手机号页。URL: https://auth.openai.com/add-phone',
+    failureMessage: '当前页面已进入手机号页面。URL: https://auth.openai.com/add-phone',
     authState: { state: 'add_phone_page', url: 'https://auth.openai.com/add-phone' },
   });
 
@@ -195,13 +197,13 @@ test('auto-run stops restarting once add-phone is detected', async () => {
 
   assert.ok(result?.error);
   assert.equal(result.events.invalidations.length, 0);
-  assert.deepStrictEqual(result.events.steps, [6]);
+  assert.deepStrictEqual(result.events.steps, [7]);
   assert.ok(result.events.logs.some(({ message }) => /进入 add-phone/.test(message)));
 });
 
-test('auto-run stop errors after step 6 are rethrown immediately instead of restarting', async () => {
+test('auto-run stop errors after step 7 are rethrown immediately instead of restarting', async () => {
   const harness = createHarness({
-    failureStep: 8,
+    failureStep: 9,
     failureBudget: 1,
     failureMessage: '流程已被用户停止。',
     authState: { state: 'password_page', url: 'https://auth.openai.com/log-in' },
@@ -211,6 +213,6 @@ test('auto-run stop errors after step 6 are rethrown immediately instead of rest
 
   assert.equal(result?.error?.message, '流程已被用户停止。');
   assert.equal(result.events.invalidations.length, 0);
-  assert.deepStrictEqual(result.events.steps, [6, 7, 8]);
-  assert.ok(!result.events.logs.some(({ message }) => /回到步骤 6 重新开始授权流程/.test(message)));
+  assert.deepStrictEqual(result.events.steps, [7, 8, 9]);
+  assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
 });

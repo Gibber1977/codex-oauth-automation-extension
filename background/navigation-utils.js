@@ -92,7 +92,7 @@
 
     function shouldSkipLoginVerificationForCpaCallback(state) {
       return getPanelMode(state) === 'cpa'
-        && normalizeCpaCallbackMode(state?.cpaCallbackMode) === 'step6';
+        && normalizeCpaCallbackMode(state?.cpaCallbackMode) === 'step7';
     }
 
     function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {

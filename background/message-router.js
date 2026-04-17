@@ -132,7 +132,7 @@
             await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
           }
           break;
-        case 6:
+        case 7:
           if (payload.loginVerificationRequestedAt) {
             await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
           }
@@ -143,22 +143,22 @@
             signupVerificationRequestedAt: null,
           });
           break;
-        case 7:
+        case 8:
           await setState({
             lastEmailTimestamp: payload.emailTimestamp || null,
             loginVerificationRequestedAt: null,
           });
           break;
-        case 8:
+        case 9:
           if (payload.localhostUrl) {
             if (!isLocalhostOAuthCallbackUrl(payload.localhostUrl)) {
-              throw new Error('步骤 8 返回了无效的 localhost OAuth 回调地址。');
+              throw new Error('步骤 9 返回了无效的 localhost OAuth 回调地址。');
             }
             await setState({ localhostUrl: payload.localhostUrl });
             broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
           }
           break;
-        case 9: {
+        case 10: {
           if (payload.localhostUrl) {
             await closeLocalhostCallbackTabs(payload.localhostUrl);
           }
@@ -232,11 +232,11 @@
             return { ok: true, error: errorMessage };
           }
 
-          const completionState = message.step === 9 ? await getState() : null;
+          const completionState = message.step === 10 ? await getState() : null;
           await setStepStatus(message.step, 'completed');
           await addLog(`步骤 ${message.step} 已完成`, 'ok');
           await handleStepData(message.step, message.payload);
-          if (message.step === 9 && typeof appendAccountRunRecord === 'function') {
+          if (message.step === 10 && typeof appendAccountRunRecord === 'function') {
             await appendAccountRunRecord('success', completionState);
           }
           notifyStepComplete(message.step, message.payload);

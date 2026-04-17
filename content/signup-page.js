@@ -37,7 +37,7 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
         }
 
         if (message.type === 'STEP8_FIND_AND_CLICK') {
-          log(`步骤 8：${err.message}`, 'error');
+          log(`步骤 9：${err.message}`, 'error');
           sendResponse({ error: err.message });
           return;
         }
@@ -61,8 +61,8 @@ async function handleCommand(message) {
         case 2: return await step2_clickRegister(message.payload);
         case 3: return await step3_fillEmailPassword(message.payload);
         case 5: return await step5_fillNameBirthday(message.payload);
-        case 6: return await step6_login(message.payload);
-        case 8: return await step8_findAndClick();
+        case 7: return await step6_login(message.payload);
+        case 9: return await step8_findAndClick();
         default: throw new Error(`signup-page.js 不处理步骤 ${message.step}`);
       }
     case 'FILL_CODE':
@@ -199,7 +199,7 @@ function isEmailVerificationPage() {
 }
 
 async function resendVerificationCode(step, timeout = 45000) {
-  if (step === 7) {
+  if (step === 8) {
     await waitForLoginVerificationPageReady();
   }
 
@@ -1185,7 +1185,7 @@ async function waitForLoginVerificationPageReady(timeout = 10000) {
   }
 
   throw new Error(
-    `当前未进入登录验证码页面，请先重新完成步骤 6。当前状态：${getLoginAuthStateLabel(snapshot)}。URL: ${snapshot?.url || location.href}`
+    `当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：${getLoginAuthStateLabel(snapshot)}。URL: ${snapshot?.url || location.href}`
   );
 }
 
@@ -1216,15 +1216,15 @@ async function createStep6LoginTimeoutRecoverableResult(reason, snapshot, messag
     try {
       const recoveryResult = await recoverCurrentAuthRetryPage({
         flow: 'login',
-        logLabel: '步骤 6：检测到登录超时报错，正在点击“重试”恢复当前页面',
+        logLabel: '步骤 7：检测到登录超时报错，正在点击“重试”恢复当前页面',
         step: 6,
         timeoutMs: 12000,
       });
       if (recoveryResult?.recovered) {
-        log('步骤 6：登录超时报错页已点击“重试”，准备重新执行当前步骤。', 'warn');
+        log('步骤 7：登录超时报错页已点击“重试”，准备重新执行当前步骤。', 'warn');
       }
     } catch (error) {
-      log(`步骤 6：登录超时报错页自动点击“重试”失败：${error.message}`, 'warn');
+      log(`步骤 7：登录超时报错页自动点击“重试”失败：${error.message}`, 'warn');
     }
   }
 
@@ -1248,9 +1248,9 @@ function throwForStep6FatalState(snapshot) {
   snapshot = normalizeStep6Snapshot(snapshot);
   switch (snapshot?.state) {
     case 'oauth_consent_page':
-      throw new Error(`当前页面已进入 OAuth 授权页，未经过登录验证码页，无法完成步骤 6。URL: ${snapshot.url}`);
+      throw new Error(`当前页面已进入 OAuth 授权页，未经过登录验证码页，无法完成步骤 7。URL: ${snapshot.url}`);
     case 'add_phone_page':
-      throw new Error(`当前页面已进入手机号页面，未经过登录验证码页，无法完成步骤 6。URL: ${snapshot.url}`);
+      throw new Error(`当前页面已进入手机号页面，未经过登录验证码页，无法完成步骤 7。URL: ${snapshot.url}`);
     case 'unknown':
       throw new Error(`无法识别当前登录页面状态。URL: ${snapshot?.url || location.href}`);
     default:
@@ -1412,7 +1412,7 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
 
 
 async function waitForVerificationSubmitOutcome(step, timeout) {
-  const resolvedTimeout = timeout ?? (step === 7 ? 30000 : 12000);
+  const resolvedTimeout = timeout ?? (step === 8 ? 30000 : 12000);
   const start = Date.now();
 
   while (Date.now() - start < resolvedTimeout) {
@@ -1427,11 +1427,11 @@ async function waitForVerificationSubmitOutcome(step, timeout) {
       return { success: true };
     }
 
-    if (step === 7 && isStep8Ready()) {
+    if (step === 8 && isStep8Ready()) {
       return { success: true };
     }
 
-    if (step === 7 && isAddPhonePageReady()) {
+    if (step === 8 && isAddPhonePageReady()) {
       return { success: true, addPhonePage: true };
     }
 
@@ -1454,7 +1454,7 @@ async function fillVerificationCode(step, payload) {
 
   log(`步骤 ${step}：正在填写验证码：${code}`);
 
-  if (step === 7) {
+  if (step === 8) {
     await waitForLoginVerificationPageReady();
   }
 
@@ -1771,11 +1771,11 @@ async function step6SwitchToOneTimeCodeLogin(snapshot) {
     });
   }
 
-  log('步骤 6：已检测到一次性验证码登录入口，准备切换...');
+  log('步骤 7：已检测到一次性验证码登录入口，准备切换...');
   const loginVerificationRequestedAt = Date.now();
   await humanPause(350, 900);
   simulateClick(switchTrigger);
-  log('步骤 6：已点击一次性验证码登录');
+  log('步骤 7：已点击一次性验证码登录');
   await sleep(1200);
   return waitForStep6SwitchTransition(loginVerificationRequestedAt);
 }
@@ -1785,26 +1785,26 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
 
   if (currentSnapshot.passwordInput) {
     if (!payload.password) {
-      throw new Error('登录时缺少密码，步骤 6 无法继续。');
+      throw new Error('登录时缺少密码，步骤 7 无法继续。');
     }
 
-    log('步骤 6：已进入密码页，准备填写密码...');
+    log('步骤 7：已进入密码页，准备填写密码...');
     await humanPause(550, 1450);
     fillInput(currentSnapshot.passwordInput, payload.password);
-    log('步骤 6：已填写密码');
+    log('步骤 7：已填写密码');
 
     await sleep(500);
     const passwordSubmittedAt = Date.now();
     await triggerLoginSubmitAction(currentSnapshot.submitButton, currentSnapshot.passwordInput);
-    log('步骤 6：已提交密码');
+    log('步骤 7：已提交密码');
 
     const transition = await waitForStep6PasswordSubmitTransition(passwordSubmittedAt);
     if (transition.action === 'done') {
-      log('步骤 6：已进入登录验证码页面。', 'ok');
+      log('步骤 7：已进入登录验证码页面。', 'ok');
       return transition.result;
     }
     if (transition.action === 'recoverable') {
-      log(`步骤 6：${transition.result.message || '提交密码后仍未进入登录验证码页面，准备重新执行步骤 6。'}`, 'warn');
+      log(`步骤 7：${transition.result.message || '提交密码后仍未进入登录验证码页面，准备重新执行步骤 7。'}`, 'warn');
       return transition.result;
     }
     if (transition.action === 'switch') {
@@ -1835,23 +1835,23 @@ async function step6LoginFromEmailPage(payload, snapshot) {
   if ((emailInput.value || '').trim() !== payload.email) {
     await humanPause(500, 1400);
     fillInput(emailInput, payload.email);
-    log('步骤 6：已填写邮箱');
+    log('步骤 7：已填写邮箱');
   } else {
-    log('步骤 6：邮箱已在输入框中，准备提交...');
+    log('步骤 7：邮箱已在输入框中，准备提交...');
   }
 
   await sleep(500);
   const emailSubmittedAt = Date.now();
   await triggerLoginSubmitAction(currentSnapshot.submitButton, emailInput);
-  log('步骤 6：已提交邮箱');
+  log('步骤 7：已提交邮箱');
 
   const transition = await waitForStep6EmailSubmitTransition(emailSubmittedAt);
   if (transition.action === 'done') {
-    log('步骤 6：已进入登录验证码页面。', 'ok');
+    log('步骤 7：已进入登录验证码页面。', 'ok');
     return transition.result;
   }
   if (transition.action === 'recoverable') {
-    log(`步骤 6：${transition.result.message || '提交邮箱后仍未进入目标页面，准备重新执行步骤 6。'}`, 'warn');
+    log(`步骤 7：${transition.result.message || '提交邮箱后仍未进入目标页面，准备重新执行步骤 7。'}`, 'warn');
     return transition.result;
   }
   if (transition.action === 'password') {
@@ -1867,17 +1867,17 @@ async function step6_login(payload) {
   const { email } = payload;
   if (!email) throw new Error('登录时缺少邮箱地址。');
 
-  log(`步骤 6：正在使用 ${email} 登录...`);
+  log(`步骤 7：正在使用 ${email} 登录...`);
 
   const snapshot = normalizeStep6Snapshot(await waitForKnownLoginAuthState(15000));
 
   if (snapshot.state === 'verification_page') {
-    log('步骤 6：登录验证码页面已就绪。', 'ok');
+    log('步骤 7：登录验证码页面已就绪。', 'ok');
     return createStep6SuccessResult(snapshot, { via: 'already_on_verification_page' });
   }
 
   if (snapshot.state === 'login_timeout_error_page') {
-    log('步骤 6：检测到登录超时报错，准备重新执行步骤 6。', 'warn');
+    log('步骤 7：检测到登录超时报错，准备重新执行步骤 7。', 'warn');
     return await createStep6LoginTimeoutRecoverableResult(
       'login_timeout_error_page',
       snapshot,
@@ -1898,19 +1898,19 @@ async function step6_login(payload) {
 }
 
 // ============================================================
-// Step 8: Find "继续" on OAuth consent page for debugger click
+// Step 9: Find "继续" on OAuth consent page for debugger click
 // ============================================================
 // After login + verification, page shows:
 // "使用 ChatGPT 登录到 Codex" with a "继续" submit button.
 // Background performs the actual click through the debugger Input API.
 
 async function step8_findAndClick() {
-  log('步骤 8：正在查找 OAuth 同意页的“继续”按钮...');
+  log('步骤 9：正在查找 OAuth 同意页的“继续”按钮...');
 
   const continueBtn = await prepareStep8ContinueButton();
 
   const rect = getSerializableRect(continueBtn);
-  log('步骤 8：已找到“继续”按钮并准备好调试器点击坐标。');
+  log('步骤 9：已找到“继续”按钮并准备好调试器点击坐标。');
   return {
     rect,
     buttonText: (continueBtn.textContent || '').trim(),
@@ -1969,10 +1969,10 @@ async function step8_triggerContinue(payload = {}) {
       simulateClick(continueBtn);
       break;
     default:
-      throw new Error(`未知的 Step 8 触发策略：${strategy}`);
+      throw new Error(`未知的 Step 9 触发策略：${strategy}`);
   }
 
-  log(`Step 8: continue button triggered via ${strategy}.`);
+  log(`Step 9: continue button triggered via ${strategy}.`);
   return {
     strategy,
     ...getStep8State(),

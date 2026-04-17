@@ -194,7 +194,7 @@ const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_STEP_DELAY_MIN_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_SECONDS = 600;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
-const DEFAULT_CPA_CALLBACK_MODE = 'step8';
+const DEFAULT_CPA_CALLBACK_MODE = 'step9';
 const MAIL_2925_MODE_PROVIDE = 'provide';
 const MAIL_2925_MODE_RECEIVE = 'receive';
 const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
@@ -834,7 +834,7 @@ function getStepStatuses(state = latestState) {
 
 function getFirstUnfinishedStep(state = latestState) {
   const statuses = getStepStatuses(state);
-  for (let step = 1; step <= 9; step++) {
+  for (const step of STEP_IDS) {
     if (!isDoneStatus(statuses[step])) {
       return step;
     }
@@ -1320,9 +1320,14 @@ function normalizeLocalCpaStep9Mode(value = '') {
 }
 
 function normalizeCpaCallbackMode(value = '') {
-  return String(value || '').trim().toLowerCase() === 'step6'
-    ? 'step6'
-    : DEFAULT_CPA_CALLBACK_MODE;
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'step7' || normalized === 'step6') {
+    return 'step7';
+  }
+  if (normalized === 'step9' || normalized === 'step8') {
+    return 'step9';
+  }
+  return DEFAULT_CPA_CALLBACK_MODE;
 }
 
 function normalizeMail2925Mode(value = '') {
@@ -2623,8 +2628,8 @@ function updateStatusDisplay(state) {
     .map(([k]) => Number(k))
     .sort((a, b) => b - a)[0];
 
-  if (lastCompleted === 9) {
-    displayStatus.textContent = (state.stepStatuses[9] === 'manual_completed' || state.stepStatuses[9] === 'skipped') ? '全部步骤已跳过/完成' : '全部步骤已完成';
+  if (lastCompleted === STEP_IDS[STEP_IDS.length - 1]) {
+    displayStatus.textContent = (state.stepStatuses[lastCompleted] === 'manual_completed' || state.stepStatuses[lastCompleted] === 'skipped') ? '全部步骤已跳过/完成' : '全部步骤已完成';
     statusBar.classList.add('completed');
   } else if (lastCompleted) {
     displayStatus.textContent = (state.stepStatuses[lastCompleted] === 'manual_completed' || state.stepStatuses[lastCompleted] === 'skipped')

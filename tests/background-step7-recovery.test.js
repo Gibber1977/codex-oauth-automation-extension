@@ -4,17 +4,17 @@ const fs = require('node:fs');
 
 const source = fs.readFileSync('background/steps/fetch-login-code.js', 'utf8');
 const globalScope = {};
-const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
+const api = new Function('self', `${source}; return self.MultiPageBackgroundStep8;`)(globalScope);
 
-test('step 7 refreshes CPA oauth via step 6 replay before submitting verification code', async () => {
+test('step 8 refreshes CPA oauth via step 7 replay before submitting verification code', async () => {
   const calls = {
     ensureReady: 0,
-    executeStep6: [],
+    executeStep7: 0,
     sleep: [],
     resolveOptions: null,
   };
 
-  const executor = api.createStep7Executor({
+  const executor = api.createStep8Executor({
     addLog: async () => {},
     chrome: {
       tabs: {
@@ -23,12 +23,12 @@ test('step 7 refreshes CPA oauth via step 6 replay before submitting verificatio
     },
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
-    ensureStep7VerificationPageReady: async () => {
+    ensureStep8VerificationPageReady: async () => {
       calls.ensureReady += 1;
       return { state: 'verification_page' };
     },
-    executeStep6: async (_state, options = {}) => {
-      calls.executeStep6.push(options);
+    executeStep7: async () => {
+      calls.executeStep7 += 1;
     },
     getMailConfig: () => ({
       provider: 'qq',
@@ -61,7 +61,7 @@ test('step 7 refreshes CPA oauth via step 6 replay before submitting verificatio
     throwIfStopped: () => {},
   });
 
-  await executor.executeStep7({
+  await executor.executeStep8({
     email: 'user@example.com',
     password: 'secret',
     oauthUrl: 'https://oauth.example/latest',
@@ -69,15 +69,15 @@ test('step 7 refreshes CPA oauth via step 6 replay before submitting verificatio
 
   assert.equal(typeof calls.resolveOptions.beforeSubmit, 'function');
   assert.equal(calls.ensureReady, 2);
-  assert.deepStrictEqual(calls.executeStep6, [{ skipPreLoginCleanup: true }]);
+  assert.equal(calls.executeStep7, 1);
   assert.deepStrictEqual(calls.sleep, [1200]);
   assert.equal(calls.resolveOptions.resendIntervalMs, 25000);
 });
 
-test('step 7 disables resend interval for 2925 mailbox polling', async () => {
+test('step 8 disables resend interval for 2925 mailbox polling', async () => {
   let capturedOptions = null;
 
-  const executor = api.createStep7Executor({
+  const executor = api.createStep8Executor({
     addLog: async () => {},
     chrome: {
       tabs: {
@@ -86,8 +86,8 @@ test('step 7 disables resend interval for 2925 mailbox polling', async () => {
     },
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
-    ensureStep7VerificationPageReady: async () => ({ state: 'verification_page' }),
-    executeStep6: async () => {},
+    ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
+    executeStep7: async () => {},
     getMailConfig: () => ({
       provider: '2925',
       label: '2925 邮箱',
@@ -116,7 +116,7 @@ test('step 7 disables resend interval for 2925 mailbox polling', async () => {
     throwIfStopped: () => {},
   });
 
-  await executor.executeStep7({
+  await executor.executeStep8({
     email: 'user@example.com',
     password: 'secret',
     oauthUrl: 'https://oauth.example/latest',

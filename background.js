@@ -19,6 +19,7 @@ importScripts(
   'background/steps/fill-password.js',
   'background/steps/fetch-signup-code.js',
   'background/steps/fill-profile.js',
+  'background/steps/clear-login-cookies.js',
   'background/steps/oauth-login.js',
   'background/steps/fetch-login-code.js',
   'background/steps/confirm-oauth.js',
@@ -31,6 +32,14 @@ importScripts(
   'icloud-utils.js',
   'content/activation-utils.js'
 );
+
+const SHARED_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.() || [];
+const STEP_IDS = SHARED_STEP_DEFINITIONS
+  .map((definition) => Number(definition?.id))
+  .filter(Number.isFinite)
+  .sort((left, right) => left - right);
+const LAST_STEP_ID = STEP_IDS[STEP_IDS.length - 1] || 10;
+const FINAL_OAUTH_CHAIN_START_STEP = 7;
 
 const {
   extractVerificationCodeFromMessage,
@@ -144,7 +153,7 @@ const AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;
 const LEGACY_AUTO_STEP_DELAY_KEYS = ['autoStepRandomDelayMinSeconds', 'autoStepRandomDelayMaxSeconds'];
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
-const DEFAULT_CPA_CALLBACK_MODE = 'step8';
+const DEFAULT_CPA_CALLBACK_MODE = 'step9';
 const MAIL_2925_MODE_PROVIDE = 'provide';
 const MAIL_2925_MODE_RECEIVE = 'receive';
 const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
@@ -258,10 +267,7 @@ const PRE_LOGIN_COOKIE_CLEAR_ORIGINS = [
 
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
-  stepStatuses: {
-    1: 'pending', 2: 'pending', 3: 'pending', 4: 'pending', 5: 'pending', // 运行时步骤状态映射，不要手动预填。
-    6: 'pending', 7: 'pending', 8: 'pending', 9: 'pending',
-  },
+  stepStatuses: Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending'])),
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
@@ -610,9 +616,14 @@ function normalizeLocalCpaStep9Mode(value = '') {
 }
 
 function normalizeCpaCallbackMode(value = '') {
-  return String(value || '').trim().toLowerCase() === 'step6'
-    ? 'step6'
-    : DEFAULT_CPA_CALLBACK_MODE;
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'step7' || normalized === 'step6') {
+    return 'step7';
+  }
+  if (normalized === 'step9' || normalized === 'step8') {
+    return 'step9';
+  }
+  return DEFAULT_CPA_CALLBACK_MODE;
 }
 
 function normalizeCloudflareDomain(rawValue = '') {
@@ -3491,7 +3502,7 @@ function shouldSkipLoginVerificationForCpaCallback(state) {
     return navigationUtils.shouldSkipLoginVerificationForCpaCallback(state);
   }
   return getPanelMode(state) === 'cpa'
-    && normalizeCpaCallbackMode(state?.cpaCallbackMode) === 'step6';
+    && normalizeCpaCallbackMode(state?.cpaCallbackMode) === 'step7';
 }
 
 function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
@@ -3806,7 +3817,7 @@ function getFirstUnfinishedStep(statuses = {}) {
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.getFirstUnfinishedStep) {
     return loggingStatus.getFirstUnfinishedStep(statuses);
   }
-  for (let step = 1; step <= 9; step++) {
+  for (const step of STEP_IDS) {
     if (!isStepDoneStatus(statuses[step] || 'pending')) return step;
   }
   return null;
@@ -3858,14 +3869,14 @@ function getDownstreamStateResets(step) {
       localhostUrl: null,
     };
   }
-  if (step === 5 || step === 6 || step === 7) {
+  if (step === 5 || step === 6 || step === 7 || step === 8) {
     return {
       lastLoginCode: null,
       loginVerificationRequestedAt: null,
       localhostUrl: null,
     };
   }
-  if (step === 8) {
+  if (step === 9) {
     return {
       localhostUrl: null,
     };
@@ -3879,7 +3890,7 @@ async function invalidateDownstreamAfterStepRestart(step, options = {}) {
   const statuses = { ...(state.stepStatuses || {}) };
   const changedSteps = [];
 
-  for (let downstream = step + 1; downstream <= 9; downstream++) {
+  for (let downstream = step + 1; downstream <= LAST_STEP_ID; downstream++) {
     if (statuses[downstream] !== 'pending') {
       statuses[downstream] = 'pending';
       changedSteps.push(downstream);
@@ -4307,7 +4318,7 @@ async function ensureManualInteractionAllowed(actionLabel) {
 async function skipStep(step) {
   const state = await ensureManualInteractionAllowed('跳过步骤');
 
-  if (!Number.isInteger(step) || step < 1 || step > 9) {
+  if (!Number.isInteger(step) || !STEP_IDS.includes(step)) {
     throw new Error(`无效步骤：${step}`);
   }
 
@@ -4367,7 +4378,7 @@ async function clickWithDebugger(tabId, rect) {
     throw new Error('未找到用于调试点击的认证页面标签页。');
   }
   if (!rect || !Number.isFinite(rect.centerX) || !Number.isFinite(rect.centerY)) {
-    throw new Error('步骤 8 的调试器兜底点击需要有效的按钮坐标。');
+    throw new Error('步骤 9 的调试器兜底点击需要有效的按钮坐标。');
   }
 
   const target = { tabId };
@@ -4375,7 +4386,7 @@ async function clickWithDebugger(tabId, rect) {
     await chrome.debugger.attach(target, '1.3');
   } catch (err) {
     throw new Error(
-      `步骤 8 的调试器兜底点击附加失败：${err.message}。` +
+      `步骤 9 的调试器兜底点击附加失败：${err.message}。` +
       '如果认证页标签已打开 DevTools，请先关闭后重试。'
     );
   }
@@ -4500,7 +4511,7 @@ async function handleStepData(step, payload) {
         await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
       }
       break;
-    case 6:
+    case 7:
       if (payload.loginVerificationRequestedAt) {
         await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
       }
@@ -4511,22 +4522,22 @@ async function handleStepData(step, payload) {
         signupVerificationRequestedAt: null,
       });
       break;
-    case 7:
+    case 8:
       await setState({
         lastEmailTimestamp: payload.emailTimestamp || null,
         loginVerificationRequestedAt: null,
       });
       break;
-    case 8:
+    case 9:
       if (payload.localhostUrl) {
         if (!isLocalhostOAuthCallbackUrl(payload.localhostUrl)) {
-          throw new Error('步骤 8 返回了无效的 localhost OAuth 回调地址。');
+          throw new Error('步骤 9 返回了无效的 localhost OAuth 回调地址。');
         }
         await setState({ localhostUrl: payload.localhostUrl });
         broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
       }
       break;
-    case 9: {
+    case 10: {
       if (payload.localhostUrl) {
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
@@ -4571,8 +4582,8 @@ async function handleStepData(step, payload) {
 const stepWaiters = new Map();
 let resumeWaiter = null;
 const AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS = 120000;
-const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8]);
-const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 9]);
+const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8, 9]);
+const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 10]);
 
 function waitForStepComplete(step, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
@@ -4618,11 +4629,11 @@ async function completeStepFromBackground(step, payload = {}) {
     return;
   }
 
-  const completionState = step === 9 ? await getState() : null;
+  const completionState = step === LAST_STEP_ID ? await getState() : null;
   await setStepStatus(step, 'completed');
   await addLog(`步骤 ${step} 已完成`, 'ok');
   await handleStepData(step, payload);
-  if (step === 9) {
+  if (step === LAST_STEP_ID) {
     await appendAndBroadcastAccountRunRecord('success', completionState);
   }
   notifyStepComplete(step, payload);
@@ -5274,7 +5285,7 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
 async function runAutoSequenceFromStep(startStep, context = {}) {
   const { targetRun, totalRuns, attemptRuns, continued = false } = context;
-  let postStep6RestartCount = 0;
+  let postStep7RestartCount = 0;
 
   if (continued) {
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：继续当前进度，从步骤 ${startStep} 开始（第 ${attemptRuns} 次尝试）===`, 'info');
@@ -5315,12 +5326,12 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
   }
 
   let step = Math.max(startStep, 4);
-  while (step <= 9) {
+  while (step <= LAST_STEP_ID) {
     try {
       await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
       const latestState = await getState();
-      if (step === 6 && shouldSkipLoginVerificationForCpaCallback(latestState)) {
-        step = 8;
+      if (step === FINAL_OAUTH_CHAIN_START_STEP && shouldSkipLoginVerificationForCpaCallback(latestState)) {
+        step = 9;
         continue;
       }
       step += 1;
@@ -5331,7 +5342,7 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
 
       const restartDecision = await getPostStep6AutoRestartDecision(step, err);
       if (restartDecision.shouldRestart) {
-        postStep6RestartCount += 1;
+        postStep7RestartCount += 1;
         const authState = restartDecision.authState;
         const authStateLabel = authState?.state ? getLoginAuthStateLabel(authState.state) : '未知页面';
         const authStateSuffix = authState?.url
@@ -5340,19 +5351,19 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
             ? `当前认证页：${authStateLabel}`
             : '未获取到认证页状态';
         await addLog(
-          `步骤 ${step}：检测到报错且当前未进入 add-phone，正在回到步骤 6 重新开始授权流程（第 ${postStep6RestartCount} 次重开）。${authStateSuffix}；原因：${restartDecision.errorMessage || '未知错误'}`,
+          `步骤 ${step}：检测到报错且当前未进入 add-phone，正在回到步骤 7 重新开始授权流程（第 ${postStep7RestartCount} 次重开）。${authStateSuffix}；原因：${restartDecision.errorMessage || '未知错误'}`,
           'warn'
         );
-        await invalidateDownstreamAfterStepRestart(5, {
-          logLabel: `步骤 ${step} 报错后准备回到步骤 6 重试（第 ${postStep6RestartCount} 次重开）`,
+        await invalidateDownstreamAfterStepRestart(6, {
+          logLabel: `步骤 ${step} 报错后准备回到步骤 7 重试（第 ${postStep7RestartCount} 次重开）`,
         });
-        step = 6;
+        step = 7;
         continue;
       }
 
       if (restartDecision.blockedByAddPhone) {
         const addPhoneUrl = restartDecision.authState?.url || 'https://auth.openai.com/add-phone';
-        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 6 重开。`, 'warn');
+        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 7 重开。`, 'warn');
       }
       throw err;
     }
@@ -5586,6 +5597,10 @@ const step5Executor = self.MultiPageBackgroundStep5?.createStep5Executor({
   sendToContentScript,
 });
 const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
+  completeStepFromBackground,
+  runPreStep6CookieCleanup,
+});
+const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   addLog,
   completeStepFromBackground,
   getErrorMessage,
@@ -5595,20 +5610,19 @@ const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   isStep6SuccessResult,
   refreshOAuthUrlBeforeStep6,
   reuseOrCreateTab,
-  runPreStep6CookieCleanup,
   sendToContentScriptResilient,
   shouldSkipLoginVerificationForCpaCallback,
   skipLoginVerificationStepsForCpaCallback,
   STEP6_MAX_ATTEMPTS,
   throwIfStopped,
 });
-const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
+const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   addLog,
   chrome,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
-  ensureStep7VerificationPageReady,
-  executeStep6: (...args) => executeStep6(...args),
+  ensureStep8VerificationPageReady,
+  executeStep7: (...args) => executeStep7(...args),
   getPanelMode,
   getMailConfig,
   getState,
@@ -5628,7 +5642,7 @@ const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
   throwIfStopped,
 });
-const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
+const step10Executor = self.MultiPageBackgroundStep10?.createStep10Executor({
   addLog,
   chrome,
   closeConflictingTabsForSource,
@@ -5646,17 +5660,18 @@ const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
   shouldBypassStep9ForLocalCpa,
   SUB2API_STEP9_RESPONSE_TIMEOUT_MS,
 });
-const stepDefinitions = self.MultiPageStepDefinitions?.getSteps?.() || [];
+const stepDefinitions = SHARED_STEP_DEFINITIONS;
 const stepExecutorsByKey = {
   'open-chatgpt': () => step1Executor.executeStep1(),
   'submit-signup-email': (state) => step2Executor.executeStep2(state),
   'fill-password': (state) => step3Executor.executeStep3(state),
   'fetch-signup-code': (state) => step4Executor.executeStep4(state),
   'fill-profile': (state) => step5Executor.executeStep5(state),
-  'oauth-login': (state) => step6Executor.executeStep6(state),
-  'fetch-login-code': (state) => step7Executor.executeStep7(state),
-  'confirm-oauth': (state) => step8Executor.executeStep8(state),
-  'platform-verify': (state) => step9Executor.executeStep9(state),
+  'clear-login-cookies': () => step6Executor.executeStep6(),
+  'oauth-login': (state) => step7Executor.executeStep7(state),
+  'fetch-login-code': (state) => step8Executor.executeStep8(state),
+  'confirm-oauth': (state) => step9Executor.executeStep9(state),
+  'platform-verify': (state) => step10Executor.executeStep10(state),
 };
 const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter({
   addLog,
@@ -6064,13 +6079,13 @@ async function runPreStep6CookieCleanup() {
 }
 
 // ============================================================
-// Step 6: Login and ensure the auth page reaches the login verification page
+// Step 7: Login and ensure the auth page reaches the login verification page
 // ============================================================
 
 async function refreshOAuthUrlBeforeStep6(state) {
-  await addLog(`步骤 6：正在刷新登录用的 ${getPanelModeLabel(state)} OAuth 链接...`);
+  await addLog(`步骤 7：正在刷新登录用的 ${getPanelModeLabel(state)} OAuth 链接...`);
   console.log(LOG_PREFIX, '[refreshOAuthUrlBeforeStep6] requesting fresh OAuth directly from panel');
-  const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: '步骤 6' });
+  const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: '步骤 7' });
   await handleStepData(1, refreshResult);
 
   if (!refreshResult?.oauthUrl) {
@@ -6101,7 +6116,7 @@ function isAddPhoneAuthState(authState = {}) {
 async function getPostStep6AutoRestartDecision(step, error) {
   const normalizedStep = Number(step);
   const errorMessage = getErrorMessage(error);
-  if (!Number.isFinite(normalizedStep) || normalizedStep < 6 || normalizedStep > 9) {
+  if (!Number.isFinite(normalizedStep) || normalizedStep < 7 || normalizedStep > LAST_STEP_ID) {
     return {
       shouldRestart: false,
       blockedByAddPhone: false,
@@ -6122,7 +6137,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
   let authState = null;
   try {
     authState = await getLoginAuthStateFromContent({
-      logMessage: `步骤 ${normalizedStep}：正在确认当前认证页状态，以决定是否回到步骤 6 重开...`,
+      logMessage: `步骤 ${normalizedStep}：正在确认当前认证页状态，以决定是否回到步骤 7 重开...`,
     });
   } catch (inspectError) {
     console.warn(LOG_PREFIX, '[AutoRun] failed to inspect login auth state after post-step6 error', {
@@ -6150,7 +6165,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
 }
 
 async function getLoginAuthStateFromContent(options = {}) {
-  const { logMessage = '步骤 7：认证页正在切换，等待页面重新就绪后继续确认验证码页状态...' } = options;
+  const { logMessage = '步骤 8：认证页正在切换，等待页面重新就绪后继续确认验证码页状态...' } = options;
   const result = await sendToContentScriptResilient(
     'signup-page',
     {
@@ -6172,7 +6187,7 @@ async function getLoginAuthStateFromContent(options = {}) {
   return result || {};
 }
 
-async function ensureStep7VerificationPageReady() {
+async function ensureStep8VerificationPageReady() {
   const pageState = await getLoginAuthStateFromContent();
   if (pageState.state === 'verification_page') {
     return pageState;
@@ -6180,7 +6195,7 @@ async function ensureStep7VerificationPageReady() {
 
   const stateLabel = getLoginAuthStateLabel(pageState.state);
   const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
-  throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 6。当前状态：${stateLabel}.${urlPart}`.trim());
+  throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：${stateLabel}.${urlPart}`.trim());
 }
 
 async function skipLoginVerificationStepsForCpaCallback() {
@@ -6188,21 +6203,21 @@ async function skipLoginVerificationStepsForCpaCallback() {
     lastLoginCode: null,
     loginVerificationRequestedAt: null,
   });
-  await setStepStatus(6, 'skipped');
-  await addLog('步骤 6：当前已选择“第六步回调”，直接跳过步骤 6、7。', 'warn');
+  await setStepStatus(7, 'skipped');
+  await addLog('步骤 7：当前已选择“第七步回调”，直接跳过步骤 7、8。', 'warn');
   const latestState = await getState();
-  if (!isStepDoneStatus(latestState.stepStatuses?.[7])) {
-    await setStepStatus(7, 'skipped');
-    await addLog('步骤 7：当前已选择“第六步回调”，本轮无需获取登录验证码。', 'warn');
+  if (!isStepDoneStatus(latestState.stepStatuses?.[8])) {
+    await setStepStatus(8, 'skipped');
+    await addLog('步骤 8：当前已选择“第七步回调”，本轮无需获取登录验证码。', 'warn');
   }
 }
 
-async function executeStep6(state, options = {}) {
-  return step6Executor.executeStep6(state, options);
+async function executeStep6() {
+  return step6Executor.executeStep6();
 }
 
 // ============================================================
-// Step 7: Poll login verification mail and submit the login code
+// Step 7: Refresh OAuth and log in
 // ============================================================
 
 async function executeStep7(state) {
@@ -6210,7 +6225,15 @@ async function executeStep7(state) {
 }
 
 // ============================================================
-// Step 8: 完成 OAuth（自动点击 + localhost 回调监听）
+// Step 8: Poll login verification mail and submit the login code
+// ============================================================
+
+async function executeStep8(state) {
+  return step8Executor.executeStep8(state);
+}
+
+// ============================================================
+// Step 9: 完成 OAuth（自动点击 + localhost 回调监听）
 // ============================================================
 
 let webNavListener = null;
@@ -6323,12 +6346,12 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     throwIfStopped();
     const pageState = await getStep8PageState(tabId);
     if (pageState?.addPhonePage) {
-      throw new Error('步骤 8：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
+      throw new Error('步骤 9：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
     }
     if (pageState?.retryPage) {
       await recoverAuthRetryPageOnTab(tabId, {
         flow: 'auth',
-        logLabel: '步骤 8：检测到认证页重试页，正在点击“重试”恢复',
+        logLabel: '步骤 9：检测到认证页重试页，正在点击“重试”恢复',
         step: 8,
         timeoutMs: Math.max(5000, Math.min(12000, timeoutMs)),
       });
@@ -6338,7 +6361,7 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     }
     if (pageState?.consentReady) {
       if (retryRecovered) {
-        await addLog('步骤 8：认证页重试页已恢复，准备重新定位“继续”按钮...', 'info');
+        await addLog('步骤 9：认证页重试页已恢复，准备重新定位“继续”按钮...', 'info');
       }
       return pageState;
     }
@@ -6346,7 +6369,7 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
       recovered = true;
       await ensureStep8SignupPageReady(tabId, {
         timeoutMs: Math.min(10000, timeoutMs),
-        logMessage: '步骤 8：认证页内容脚本已失联，正在等待页面重新就绪...',
+        logMessage: '步骤 9：认证页内容脚本已失联，正在等待页面重新就绪...',
       });
       continue;
     }
@@ -6354,13 +6377,13 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     await sleepWithStop(250);
   }
 
-  throw new Error('步骤 8：长时间未进入 OAuth 同意页，无法定位“继续”按钮。');
+  throw new Error('步骤 9：长时间未进入 OAuth 同意页，无法定位“继续”按钮。');
 }
 
 async function prepareStep8DebuggerClick(tabId) {
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs: 15000,
-    logMessage: '步骤 8：认证页内容脚本已失联，正在恢复后继续定位按钮...',
+    logMessage: '步骤 9：认证页内容脚本已失联，正在恢复后继续定位按钮...',
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'STEP8_FIND_AND_CLICK',
@@ -6369,7 +6392,7 @@ async function prepareStep8DebuggerClick(tabId) {
   }, {
     timeoutMs: 15000,
     retryDelayMs: 600,
-    logMessage: '步骤 8：认证页正在切换，等待 OAuth 同意页按钮重新就绪...',
+    logMessage: '步骤 9：认证页正在切换，等待 OAuth 同意页按钮重新就绪...',
   });
 
   if (result?.error) {
@@ -6382,7 +6405,7 @@ async function prepareStep8DebuggerClick(tabId) {
 async function triggerStep8ContentStrategy(tabId, strategy) {
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs: 15000,
-    logMessage: '步骤 8：认证页内容脚本已失联，正在恢复后继续点击“继续”按钮...',
+    logMessage: '步骤 9：认证页内容脚本已失联，正在恢复后继续点击“继续”按钮...',
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'STEP8_TRIGGER_CONTINUE',
@@ -6395,7 +6418,7 @@ async function triggerStep8ContentStrategy(tabId, strategy) {
   }, {
     timeoutMs: 15000,
     retryDelayMs: 600,
-    logMessage: '步骤 8：认证页正在切换，等待“继续”按钮重新就绪...',
+    logMessage: '步骤 9：认证页正在切换，等待“继续”按钮重新就绪...',
   });
 
   if (result?.error) {
@@ -6409,7 +6432,7 @@ async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs: options.readyTimeoutMs ?? 15000,
     retryDelayMs: options.retryDelayMs ?? 600,
-    logMessage: options.readyLogMessage || '步骤 8：认证页内容脚本已失联，正在恢复后继续处理重试页...',
+    logMessage: options.readyLogMessage || '步骤 9：认证页内容脚本已失联，正在恢复后继续处理重试页...',
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'RECOVER_AUTH_RETRY_PAGE',
@@ -6418,7 +6441,7 @@ async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
   }, {
     timeoutMs: options.timeoutMs ?? 15000,
     retryDelayMs: options.retryDelayMs ?? 600,
-    logMessage: options.logMessage || '步骤 8：认证页正在切换，等待“重试”按钮重新就绪...',
+    logMessage: options.logMessage || '步骤 9：认证页正在切换，等待“重试”按钮重新就绪...',
   });
 
   if (result?.error) {
@@ -6430,7 +6453,7 @@ async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
 
 async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
   if (!Number.isInteger(tabId)) {
-    throw new Error('步骤 8：缺少有效的认证页标签页，无法刷新后重试。');
+    throw new Error('步骤 9：缺少有效的认证页标签页，无法刷新后重试。');
   }
 
   await chrome.tabs.update(tabId, { active: true }).catch(() => { });
@@ -6441,7 +6464,7 @@ async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
       if (settled) return;
       settled = true;
       chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('步骤 8：刷新认证页后等待页面完成加载超时。'));
+      reject(new Error('步骤 9：刷新认证页后等待页面完成加载超时。'));
     }, timeoutMs);
 
     const listener = (updatedTabId, changeInfo) => {
@@ -6466,7 +6489,7 @@ async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
 
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs: Math.min(15000, timeoutMs),
-    logMessage: '步骤 8：认证页刷新后内容脚本尚未就绪，正在等待页面恢复...',
+    logMessage: '步骤 9：认证页刷新后内容脚本尚未就绪，正在等待页面恢复...',
   });
 }
 
@@ -6479,7 +6502,7 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
 
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) {
-      throw new Error('步骤 8：认证页面标签页已关闭，无法继续自动授权。');
+      throw new Error('步骤 9：认证页面标签页已关闭，无法继续自动授权。');
     }
 
     if (baselineUrl && typeof tab.url === 'string' && tab.url !== baselineUrl) {
@@ -6488,12 +6511,12 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
 
     const pageState = await getStep8PageState(tabId);
     if (pageState?.addPhonePage) {
-      throw new Error('步骤 8：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
+      throw new Error('步骤 9：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
     }
     if (pageState?.retryPage) {
       await recoverAuthRetryPageOnTab(tabId, {
         flow: 'auth',
-        logLabel: '步骤 8：点击“继续”后进入重试页，正在点击“重试”恢复',
+        logLabel: '步骤 9：点击“继续”后进入重试页，正在点击“重试”恢复',
         step: 8,
         timeoutMs: Math.max(5000, Math.min(12000, timeoutMs)),
       });
@@ -6509,7 +6532,7 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
         recovered = true;
         await ensureStep8SignupPageReady(tabId, {
           timeoutMs: Math.max(3000, Math.min(8000, timeoutMs)),
-          logMessage: '步骤 8：点击后认证页正在重载，正在等待内容脚本重新就绪...',
+          logMessage: '步骤 9：点击后认证页正在重载，正在等待内容脚本重新就绪...',
         }).catch(() => null);
         continue;
       }
@@ -6547,7 +6570,7 @@ function getStep8EffectLabel(effect) {
   }
 }
 
-const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
+const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
   addLog,
   chrome,
   cleanupStep8NavigationListeners,
@@ -6580,16 +6603,16 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   waitForStep8Ready,
 });
 
-async function executeStep8(state) {
-  return step8Executor.executeStep8(state);
+async function executeStep9(state) {
+  return step9Executor.executeStep9(state);
 }
 
 // ============================================================
-// Step 9: 平台回调验证
+// Step 10: 平台回调验证
 // ============================================================
 
-async function executeStep9(state) {
-  return step9Executor.executeStep9(state);
+async function executeStep10(state) {
+  return step10Executor.executeStep10(state);
 }
 
 // ============================================================

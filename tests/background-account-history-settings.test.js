@@ -67,7 +67,10 @@ const PERSISTED_SETTING_DEFAULTS = {
 };
 function normalizePanelMode(value) { return value === 'sub2api' ? 'sub2api' : 'cpa'; }
 function normalizeLocalCpaStep9Mode(value) { return value === 'bypass' ? 'bypass' : 'submit'; }
-function normalizeCpaCallbackMode(value) { return value === 'step6' ? 'step6' : 'step8'; }
+function normalizeCpaCallbackMode(value) {
+  if (value === 'step7' || value === 'step6') return 'step7';
+  return value === 'step9' || value === 'step8' ? 'step9' : 'step9';
+}
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) { return Number(value) || 0; }
 function normalizeAutoRunDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value == null || value === '' ? null : Number(value); }

@@ -203,7 +203,7 @@ function setStep8PendingReject(handler) {
 ${helperBundle}
 ${step8ModuleSource}
 
-const executor = self.MultiPageBackgroundStep8.createStep8Executor({
+const executor = self.MultiPageBackgroundStep9.createStep9Executor({
   addLog,
   chrome,
   cleanupStep8NavigationListeners,
@@ -237,7 +237,7 @@ const executor = self.MultiPageBackgroundStep8.createStep8Executor({
 });
 
 return {
-  executeStep8: executor.executeStep8,
+  executeStep9: executor.executeStep9,
   requestStop,
   resolveTabId(tabId) {
     if (!resolveTabId) {
@@ -263,7 +263,7 @@ return {
 `)(step8ModuleSource);
 
 (async () => {
-  const step8Promise = api.executeStep8({ oauthUrl: 'https://example.com/oauth' });
+  const step8Promise = api.executeStep9({ oauthUrl: 'https://example.com/oauth' });
   const settledStep8Promise = step8Promise.catch((err) => err);
 
   await new Promise((resolve) => setImmediate(resolve));

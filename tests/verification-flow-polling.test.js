@@ -35,12 +35,12 @@ test('verification flow extends 2925 polling window', () => {
   });
 
   const step4Payload = helpers.getVerificationPollPayload(4, { email: 'user@example.com', mailProvider: '2925' });
-  const step7Payload = helpers.getVerificationPollPayload(7, { email: 'user@example.com', mailProvider: '2925' });
+  const step8Payload = helpers.getVerificationPollPayload(8, { email: 'user@example.com', mailProvider: '2925' });
 
   assert.equal(step4Payload.maxAttempts, 15);
   assert.equal(step4Payload.intervalMs, 15000);
-  assert.equal(step7Payload.maxAttempts, 15);
-  assert.equal(step7Payload.intervalMs, 15000);
+  assert.equal(step8Payload.maxAttempts, 15);
+  assert.equal(step8Payload.intervalMs, 15000);
 });
 
 test('verification flow runs beforeSubmit hook before filling the code', async () => {

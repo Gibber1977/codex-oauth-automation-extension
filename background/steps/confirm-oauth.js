@@ -1,7 +1,7 @@
-(function attachBackgroundStep8(root, factory) {
-  root.MultiPageBackgroundStep8 = factory();
-})(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep8Module() {
-  function createStep8Executor(deps = {}) {
+(function attachBackgroundStep9(root, factory) {
+  root.MultiPageBackgroundStep9 = factory();
+})(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep9Module() {
+  function createStep9Executor(deps = {}) {
     const {
       addLog,
       chrome,
@@ -32,12 +32,12 @@
       setStep8TabUpdatedListener,
     } = deps;
 
-    async function executeStep8(state) {
+    async function executeStep9(state) {
       if (!state.oauthUrl) {
-        throw new Error('缺少登录用 OAuth 链接，请先完成步骤 6。');
+        throw new Error('缺少登录用 OAuth 链接，请先完成步骤 7。');
       }
 
-      await addLog('步骤 8：正在监听 localhost 回调地址...');
+      await addLog('步骤 9：正在监听 localhost 回调地址...');
 
       return new Promise((resolve, reject) => {
         let resolved = false;
@@ -48,7 +48,7 @@
           setStep8PendingReject(null);
         };
 
-        const rejectStep8 = (error) => {
+        const rejectStep9 = (error) => {
           if (resolved) return;
           resolved = true;
           clearTimeout(timeout);
@@ -56,15 +56,15 @@
           reject(error);
         };
 
-        const finalizeStep8Callback = (callbackUrl) => {
+        const finalizeStep9Callback = (callbackUrl) => {
           if (resolved || !callbackUrl) return;
 
           resolved = true;
           cleanupListener();
           clearTimeout(timeout);
 
-          addLog(`步骤 8：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
-            return completeStepFromBackground(8, { localhostUrl: callbackUrl });
+          addLog(`步骤 9：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
+            return completeStepFromBackground(9, { localhostUrl: callbackUrl });
           }).then(() => {
             resolve();
           }).catch((err) => {
@@ -73,26 +73,26 @@
         };
 
         const timeout = setTimeout(() => {
-          rejectStep8(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 8 的点击可能被拦截了。'));
+          rejectStep9(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 9 的点击可能被拦截了。'));
         }, 120000);
 
         setStep8PendingReject((error) => {
-          rejectStep8(error);
+          rejectStep9(error);
         });
 
         setWebNavListener((details) => {
           const callbackUrl = getStep8CallbackUrlFromNavigation(details, signupTabId);
-          finalizeStep8Callback(callbackUrl);
+          finalizeStep9Callback(callbackUrl);
         });
 
         setWebNavCommittedListener((details) => {
           const callbackUrl = getStep8CallbackUrlFromNavigation(details, signupTabId);
-          finalizeStep8Callback(callbackUrl);
+          finalizeStep9Callback(callbackUrl);
         });
 
         setStep8TabUpdatedListener((tabId, changeInfo, tab) => {
           const callbackUrl = getStep8CallbackUrlFromTabUpdate(tabId, changeInfo, tab, signupTabId);
-          finalizeStep8Callback(callbackUrl);
+          finalizeStep9Callback(callbackUrl);
         });
 
         (async () => {
@@ -103,10 +103,10 @@
 
             if (signupTabId && await isTabAlive('signup-page')) {
               await chrome.tabs.update(signupTabId, { active: true });
-              await addLog('步骤 8：已切回认证页，正在准备调试器点击...');
+              await addLog('步骤 9：已切回认证页，正在准备调试器点击...');
             } else {
               signupTabId = await reuseOrCreateTab('signup-page', state.oauthUrl);
-              await addLog('步骤 8：已重新打开认证页，正在准备调试器点击...');
+              await addLog('步骤 9：已重新打开认证页，正在准备调试器点击...');
             }
 
             throwIfStep8SettledOrStopped(resolved);
@@ -115,7 +115,7 @@
             chrome.tabs.onUpdated.addListener(deps.getStep8TabUpdatedListener());
             await ensureStep8SignupPageReady(signupTabId, {
               timeoutMs: 15000,
-              logMessage: '步骤 8：认证页内容脚本尚未就绪，正在等待页面恢复...',
+              logMessage: '步骤 9：认证页内容脚本尚未就绪，正在等待页面恢复...',
             });
 
             for (let round = 1; round <= STEP8_MAX_ROUNDS && !resolved; round++) {
@@ -128,7 +128,7 @@
 
               const strategy = STEP8_STRATEGIES[Math.min(round - 1, STEP8_STRATEGIES.length - 1)];
 
-              await addLog(`步骤 8：第 ${round}/${STEP8_MAX_ROUNDS} 轮尝试点击“继续”（${strategy.label}）...`);
+              await addLog(`步骤 9：第 ${round}/${STEP8_MAX_ROUNDS} 轮尝试点击“继续”（${strategy.label}）...`);
 
               if (strategy.mode === 'debugger') {
                 const clickTarget = await prepareStep8DebuggerClick(signupTabId);
@@ -148,33 +148,33 @@
               }
 
               if (effect.progressed) {
-                await addLog(`步骤 8：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
+                await addLog(`步骤 9：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
                 break;
               }
 
               if (effect.restartCurrentStep) {
-                await addLog(`步骤 8：${getStep8EffectLabel(effect)}，准备重新定位“继续”按钮并重试...`, 'warn');
+                await addLog(`步骤 9：${getStep8EffectLabel(effect)}，准备重新定位“继续”按钮并重试...`, 'warn');
                 await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
                 continue;
               }
 
               if (round >= STEP8_MAX_ROUNDS) {
-                throw new Error(`步骤 8：连续 ${STEP8_MAX_ROUNDS} 轮点击“继续”后页面仍无反应。`);
+                throw new Error(`步骤 9：连续 ${STEP8_MAX_ROUNDS} 轮点击“继续”后页面仍无反应。`);
               }
 
-              await addLog(`步骤 8：${strategy.label} 本轮点击后页面无反应，正在刷新认证页后重试（下一轮 ${round + 1}/${STEP8_MAX_ROUNDS}）...`, 'warn');
+              await addLog(`步骤 9：${strategy.label} 本轮点击后页面无反应，正在刷新认证页后重试（下一轮 ${round + 1}/${STEP8_MAX_ROUNDS}）...`, 'warn');
               await reloadStep8ConsentPage(signupTabId);
               await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
             }
           } catch (err) {
-            rejectStep8(err);
+            rejectStep9(err);
           }
         })();
       });
     }
 
-    return { executeStep8 };
+    return { executeStep9 };
   }
 
-  return { createStep8Executor };
+  return { createStep9Executor };
 });

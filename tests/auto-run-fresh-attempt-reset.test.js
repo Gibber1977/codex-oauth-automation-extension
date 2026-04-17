@@ -70,6 +70,7 @@ const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_RUN_RETRY_DELAY_MS = 3000;
 const AUTO_RUN_TIMER_KIND_BETWEEN_ROUNDS = 'between_rounds';
 const AUTO_RUN_TIMER_KIND_BEFORE_RETRY = 'before_retry';
+const STEP_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 const DEFAULT_STATE = {
   stepStatuses: {
     1: 'pending',
@@ -81,6 +82,7 @@ const DEFAULT_STATE = {
     7: 'pending',
     8: 'pending',
     9: 'pending',
+    10: 'pending',
   },
 };
 
@@ -220,6 +222,7 @@ async function runAutoSequenceFromStep() {
       7: 'completed',
       8: 'completed',
       9: 'completed',
+      10: 'completed',
     },
     tabRegistry: {
       'signup-page': { tabId: 88, ready: true },
