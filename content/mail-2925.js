@@ -64,6 +64,13 @@ const MAIL_ITEM_SELECTORS = [
   '[class*="list-item"]',
   'li[class*="mail"]',
 ];
+const MAIL_REFRESH_SELECTOR = '[class*="refresh"], [title*="鍒锋柊"], [aria-label*="鍒锋柊"], [class*="Refresh"]';
+const MAIL_INBOX_SELECTORS = [
+  'a[href*="mailList"]',
+  '[class*="inbox"]',
+  '[class*="Inbox"]',
+  '[title*="鏀朵欢绠?]',
+];
 
 function findMailItems() {
   for (const selector of MAIL_ITEM_SELECTORS) {
@@ -73,6 +80,20 @@ function findMailItems() {
     }
   }
   return [];
+}
+
+function findRefreshButton() {
+  return document.querySelector(MAIL_REFRESH_SELECTOR);
+}
+
+function findInboxLink() {
+  for (const selector of MAIL_INBOX_SELECTORS) {
+    const node = document.querySelector(selector);
+    if (node) {
+      return node;
+    }
+  }
+  return null;
 }
 
 function getMailItemText(item) {
@@ -272,6 +293,37 @@ async function sleepRandom(minMs, maxMs = minMs) {
   await sleep(duration);
 }
 
+async function returnToInbox() {
+  if (findMailItems().length > 0) {
+    return true;
+  }
+
+  const inboxLink = findInboxLink();
+  if (!inboxLink) {
+    return false;
+  }
+
+  simulateClick(inboxLink);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(250);
+    if (findMailItems().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function openMailAndGetMessageText(item) {
+  simulateClick(item);
+  try {
+    await sleepRandom(1200, 2200);
+    return document.body?.textContent || '';
+  } finally {
+    await returnToInbox();
+  }
+}
+
 async function refreshInbox() {
   const refreshBtn = document.querySelector(
     '[class*="refresh"], [title*="刷新"], [aria-label*="刷新"], [class*="Refresh"]'
@@ -318,6 +370,7 @@ async function handlePollEmail(step, payload) {
   }
 
   if (initialItems.length === 0) {
+    await returnToInbox();
     await refreshInbox();
     await sleep(2000);
     initialItems = findMailItems();
@@ -337,6 +390,7 @@ async function handlePollEmail(step, payload) {
     log(`步骤 ${step}：正在轮询 2925 邮箱，第 ${attempt}/${maxAttempts} 次`);
 
     if (attempt > 1) {
+      await returnToInbox();
       await refreshInbox();
       await sleepRandom(900, 1500);
     }
@@ -392,9 +446,7 @@ async function handlePollEmail(step, payload) {
           return { ok: true, code, emailTimestamp: Date.now() };
         }
 
-        simulateClick(item);
-        await sleepRandom(1200, 2200);
-        const openedText = document.body?.textContent || '';
+        const openedText = await openMailAndGetMessageText(item);
         const bodyCode = extractVerificationCode(openedText, strictChatGPTCodeOnly);
         const openedTargetState = getTargetEmailMatchState(openedText, targetEmail);
         if (targetEmail && openedTargetState.hasExplicitEmail && !openedTargetState.matches) {
