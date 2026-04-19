@@ -234,6 +234,7 @@ test('verification flow treats add-phone after login code submit as fatal instea
 
   assert.deepStrictEqual(events, [
     ['submit', '654321'],
+    ['state', '654321'],
   ]);
 });
 
