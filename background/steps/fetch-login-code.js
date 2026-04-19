@@ -70,6 +70,11 @@
         enabled: Boolean(state.heroSmsEnabled),
         apiKey: String(state.heroSmsApiKey || '').trim(),
         country: String(state.heroSmsCountry || '').trim(),
+        maxActivationAgeMinutes: Math.min(60, Math.max(1, Math.floor(Number(state.heroSmsMaxActivationAgeMinutes) || 5))),
+        maxRetryCount: Math.min(10, Math.max(1, Math.floor(Number(state.heroSmsMaxRetryCount) || HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS || 3))),
+        recoveryStrategy: String(state.heroSmsRecoveryStrategy || '').trim().toLowerCase() === 'reload_current'
+          ? 'reload_current'
+          : 'open_add_phone',
       };
     }
 
@@ -81,8 +86,8 @@
       return Math.max(1, Math.floor(Number(HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS) || 3));
     }
 
-    function getHeroSmsMaxActivationAgeMs() {
-      return 5 * 60 * 1000;
+    function getHeroSmsMaxActivationAgeMs(heroSms = {}) {
+      return Math.max(1, Math.floor(Number(heroSms.maxActivationAgeMinutes) || 5)) * 60 * 1000;
     }
 
     function isHeroSmsPollingTimeoutError(error) {
@@ -168,18 +173,42 @@
     async function refreshHeroSmsPhonePage(authTabId) {
       const reloadTimeoutMs = await getStep8ReadyTimeoutMs('刷新手机号验证页面');
       const targetUrl = 'https://auth.openai.com/add-phone';
+      const currentState = await getState();
+      const heroSms = getHeroSmsConfig(currentState);
 
-      await chrome.tabs.update(authTabId, { url: targetUrl });
+      if (heroSms.recoveryStrategy === 'reload_current') {
+        await chrome.tabs.reload(authTabId);
+      } else {
+        await chrome.tabs.update(authTabId, { url: targetUrl });
+      }
+
+      const navigationStart = Date.now();
+      while (Date.now() - navigationStart < reloadTimeoutMs) {
+        throwIfStopped();
+        const tab = await chrome.tabs.get(authTabId).catch(() => null);
+        if (tab?.url && (tab.url === targetUrl || /\/add-phone(?:[/?#]|$)/i.test(tab.url))) {
+          break;
+        }
+        await sleepWithStop(250);
+      }
+
       await ensureSignupPageContentReady(
         authTabId,
         reloadTimeoutMs,
         '步骤 8：短信验证页正在刷新，等待页面恢复后继续换号...'
       );
 
-      const refreshedState = await getStep8PageState(reloadTimeoutMs).catch(() => null);
-      if (!refreshedState?.addPhonePage) {
-        throw new Error('步骤 8：刷新手机号验证页面后未能回到 add-phone 页面，无法继续更换 Hero-SMS 手机号。');
+      const stateCheckStartedAt = Date.now();
+      while (Date.now() - stateCheckStartedAt < reloadTimeoutMs) {
+        throwIfStopped();
+        const refreshedState = await getStep8PageState(Math.min(8000, reloadTimeoutMs)).catch(() => null);
+        if (refreshedState?.addPhonePage) {
+          return;
+        }
+        await sleepWithStop(250);
       }
+
+      throw new Error('步骤 8：刷新手机号验证页面后未能回到 add-phone 页面，无法继续更换 Hero-SMS 手机号。');
     }
 
     async function cancelHeroSmsActivationForRetry(apiKey, activationId, phoneNumber, options = {}) {
@@ -256,7 +285,10 @@
 
       const excludedActivationIds = [];
       const excludedPhoneNumbers = [];
-      const maxHeroSmsTimeoutAttempts = getHeroSmsPollTimeoutMaxAttempts();
+      const maxHeroSmsTimeoutAttempts = Math.max(
+        1,
+        Math.floor(Number(heroSms.maxRetryCount) || getHeroSmsPollTimeoutMaxAttempts())
+      );
       await addLog('步骤 8：已检测到短信验证页面，正在通过 Hero-SMS 获取手机号...', 'info');
 
       for (let attempt = 1; attempt <= maxHeroSmsTimeoutAttempts; attempt += 1) {
@@ -288,7 +320,7 @@
             },
             {
               activationTime,
-              maxActivationAgeMs: getHeroSmsMaxActivationAgeMs(),
+              maxActivationAgeMs: getHeroSmsMaxActivationAgeMs(heroSms),
             }
           );
 

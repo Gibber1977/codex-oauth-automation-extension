@@ -145,6 +145,29 @@
           <button id="btn-query-hero-sms-countries" class="btn btn-outline btn-sm data-inline-btn" type="button">查询</button>
         </div>
       </div>
+      <div class="data-row" id="row-hero-sms-max-activation-age">
+        <span class="data-label">SMS-超时</span>
+        <div class="data-inline">
+          <input type="number" id="input-hero-sms-max-activation-age-minutes" class="data-input" min="1" max="60" step="1"
+            placeholder="5" title="单个 Hero-SMS 号码最多等待多少分钟后自动取消" />
+          <span class="data-unit">分钟</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-hero-sms-max-retry-count">
+        <span class="data-label">SMS-换号</span>
+        <div class="data-inline">
+          <input type="number" id="input-hero-sms-max-retry-count" class="data-input" min="1" max="10" step="1"
+            placeholder="3" title="单轮最多自动取消并重新取号多少次" />
+          <span class="data-unit">次</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-hero-sms-recovery-strategy">
+        <span class="data-label">SMS-恢复</span>
+        <select id="select-hero-sms-recovery-strategy" class="data-select">
+          <option value="open_add_phone">直接打开 add-phone</option>
+          <option value="reload_current">刷新当前页面</option>
+        </select>
+      </div>
       <div class="data-row" id="row-local-cpa-step9-mode">
         <span class="data-label">本地 CPA</span>
         <div id="local-cpa-step9-mode-group" class="choice-group" role="group" aria-label="本地 CPA 第 10 步策略">

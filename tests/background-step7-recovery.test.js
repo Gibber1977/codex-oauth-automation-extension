@@ -508,6 +508,7 @@ test('step 8 cancels timed out Hero-SMS activations and retries with a new numbe
     },
     chrome: {
       tabs: {
+        get: async () => ({ id: 1, url: 'https://auth.openai.com/add-phone' }),
         update: async (tabId, payload) => {
           calls.tabUpdates.push({ tabId, payload });
         },
@@ -631,6 +632,233 @@ test('step 8 cancels timed out Hero-SMS activations and retries with a new numbe
   );
 });
 
+test('step 8 waits for add-phone page to recover before switching to the next Hero-SMS number', async () => {
+  const calls = {
+    cancelRequests: [],
+    contentMessages: [],
+    tabUpdates: [],
+  };
+  let activationPickCount = 0;
+  let pollCount = 0;
+  let tabGetCount = 0;
+  let pageStateChecks = 0;
+
+  const executor = api.createStep8Executor({
+    addLog: async () => {},
+    cancelHeroSmsActivation: async (apiKey, activationId) => {
+      calls.cancelRequests.push({ apiKey, activationId });
+      return { status: 'success' };
+    },
+    chrome: {
+      tabs: {
+        get: async () => {
+          tabGetCount += 1;
+          return tabGetCount < 2
+            ? { id: 1, url: 'https://auth.openai.com/phone-verification' }
+            : { id: 1, url: 'https://auth.openai.com/add-phone' };
+        },
+        update: async (tabId, payload) => {
+          calls.tabUpdates.push({ tabId, payload });
+        },
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
+    executeStep7: async () => {},
+    findOrCreateSmsActivation: async () => {
+      activationPickCount += 1;
+      return activationPickCount === 1
+        ? { activationId: 'act-timeout-1', phoneNumber: '+66911111111' }
+        : { activationId: 'act-ok-2', phoneNumber: '+66922222222' };
+    },
+    getMailConfig: () => ({
+      provider: 'qq',
+      label: 'QQ 邮箱',
+      source: 'mail-qq',
+      url: 'https://mail.qq.com',
+      navigateOnReuse: false,
+    }),
+    getState: async () => ({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+      heroSmsEnabled: true,
+      heroSmsApiKey: 'hero-key',
+      heroSmsCountry: '52',
+      heroSmsMaxRetryCount: 2,
+    }),
+    getTabId: async (sourceName) => (sourceName === 'signup-page' ? 1 : null),
+    HERO_SMS_PHONE_RECORDS_LOG_PATH_PREFIX: 'chrome.storage.local://heroSmsPhoneRecords',
+    HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS: 3,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    isVerificationMailPollingError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    pollSmsVerificationCode: async () => {
+      pollCount += 1;
+      if (pollCount === 1) {
+        throw new Error('等待短信验证码超时（5分钟）');
+      }
+      return '567890';
+    },
+    resolveVerificationStep: async () => {
+      throw new Error('email verification branch should not be used in hero sms flow');
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async (_source, message) => {
+      calls.contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        pageStateChecks += 1;
+        if (pageStateChecks <= 2) {
+          return { addPhonePage: true, url: 'https://auth.openai.com/add-phone' };
+        }
+        if (pageStateChecks === 3) {
+          return { addPhonePage: false, phoneVerificationPage: true, url: 'https://auth.openai.com/phone-verification' };
+        }
+        return { addPhonePage: true, url: 'https://auth.openai.com/add-phone' };
+      }
+      if (message.type === 'STEP8_SUBMIT_PHONE_NUMBER') {
+        return { addPhonePage: true, url: 'https://auth.openai.com/add-phone' };
+      }
+      if (message.type === 'STEP8_SUBMIT_SMS_CODE') {
+        return { consentReady: true };
+      }
+      throw new Error(`unexpected message ${message.type}`);
+    },
+    setState: async () => {},
+    setStepStatus: async () => {},
+    shouldUseCustomRegistrationEmail: () => false,
+    sleepWithStop: async () => {},
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'],
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep8({
+    email: 'user@example.com',
+    password: 'secret',
+    oauthUrl: 'https://oauth.example/latest',
+    heroSmsEnabled: true,
+    heroSmsApiKey: 'hero-key',
+    heroSmsCountry: '52',
+    heroSmsMaxRetryCount: 2,
+  });
+
+  assert.deepStrictEqual(calls.cancelRequests, [
+    { apiKey: 'hero-key', activationId: 'act-timeout-1' },
+  ]);
+  assert.equal(
+    calls.tabUpdates.some(({ payload }) => payload?.url === 'https://auth.openai.com/add-phone'),
+    true
+  );
+  assert.equal(tabGetCount >= 2, true, 'should wait for tab url to move back to add-phone');
+});
+
+test('step 8 honors configured Hero-SMS retry count', async () => {
+  const calls = {
+    cancelRequests: [],
+  };
+  let activationPickCount = 0;
+
+  const executor = api.createStep8Executor({
+    addLog: async () => {},
+    cancelHeroSmsActivation: async (apiKey, activationId) => {
+      calls.cancelRequests.push({ apiKey, activationId });
+      return { status: 'success' };
+    },
+    chrome: {
+      tabs: {
+        get: async () => ({ id: 1, url: 'https://auth.openai.com/add-phone' }),
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {
+      throw new Error('step 8 should not complete when configured hero sms retries time out');
+    },
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
+    executeStep7: async () => {},
+    findOrCreateSmsActivation: async () => {
+      activationPickCount += 1;
+      return {
+        activationId: `act-timeout-${activationPickCount}`,
+        phoneNumber: `+6690000000${activationPickCount}`,
+      };
+    },
+    getMailConfig: () => ({
+      provider: 'qq',
+      label: 'QQ 邮箱',
+      source: 'mail-qq',
+      url: 'https://mail.qq.com',
+      navigateOnReuse: false,
+    }),
+    getState: async () => ({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+      heroSmsEnabled: true,
+      heroSmsApiKey: 'hero-key',
+      heroSmsCountry: '52',
+      heroSmsMaxRetryCount: 2,
+    }),
+    getTabId: async (sourceName) => (sourceName === 'signup-page' ? 1 : null),
+    HERO_SMS_PHONE_RECORDS_LOG_PATH_PREFIX: 'chrome.storage.local://heroSmsPhoneRecords',
+    HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS: 3,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    isVerificationMailPollingError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    pollSmsVerificationCode: async () => {
+      throw new Error('等待短信验证码超时（5分钟）');
+    },
+    resolveVerificationStep: async () => {
+      throw new Error('email verification branch should not be used in hero sms flow');
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'STEP8_GET_STATE') {
+        return { addPhonePage: true, url: 'https://auth.openai.com/add-phone' };
+      }
+      if (message.type === 'STEP8_SUBMIT_PHONE_NUMBER') {
+        return { addPhonePage: true, url: 'https://auth.openai.com/add-phone' };
+      }
+      throw new Error(`unexpected message ${message.type}`);
+    },
+    setState: async () => {},
+    setStepStatus: async () => {},
+    shouldUseCustomRegistrationEmail: () => false,
+    sleepWithStop: async () => {},
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'],
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    executor.executeStep8({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+      heroSmsEnabled: true,
+      heroSmsApiKey: 'hero-key',
+      heroSmsCountry: '52',
+      heroSmsMaxRetryCount: 2,
+    }),
+    /Hero-SMS 连续 2 次等待短信验证码超时，已取消当前号码/
+  );
+
+  assert.deepStrictEqual(calls.cancelRequests, [
+    { apiKey: 'hero-key', activationId: 'act-timeout-1' },
+    { apiKey: 'hero-key', activationId: 'act-timeout-2' },
+  ]);
+});
+
 test('step 8 fails after three Hero-SMS polling timeouts and cancels the last activation', async () => {
   const calls = {
     cancelRequests: [],
@@ -649,6 +877,7 @@ test('step 8 fails after three Hero-SMS polling timeouts and cancels the last ac
     },
     chrome: {
       tabs: {
+        get: async () => ({ id: 1, url: 'https://auth.openai.com/add-phone' }),
         update: async () => {},
       },
     },

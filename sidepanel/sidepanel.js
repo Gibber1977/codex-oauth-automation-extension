@@ -75,6 +75,12 @@ const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
 const btnToggleHeroSmsApiKey = document.getElementById('btn-toggle-hero-sms-api-key');
 const rowHeroSmsCountry = document.getElementById('row-hero-sms-country');
 const inputHeroSmsCountry = document.getElementById('input-hero-sms-country');
+const rowHeroSmsMaxActivationAge = document.getElementById('row-hero-sms-max-activation-age');
+const inputHeroSmsMaxActivationAgeMinutes = document.getElementById('input-hero-sms-max-activation-age-minutes');
+const rowHeroSmsMaxRetryCount = document.getElementById('row-hero-sms-max-retry-count');
+const inputHeroSmsMaxRetryCount = document.getElementById('input-hero-sms-max-retry-count');
+const rowHeroSmsRecoveryStrategy = document.getElementById('row-hero-sms-recovery-strategy');
+const selectHeroSmsRecoveryStrategy = document.getElementById('select-hero-sms-recovery-strategy');
 const btnQueryHeroSmsCountries = document.getElementById('btn-query-hero-sms-countries');
 const rowLocalCpaStep9Mode = document.getElementById('row-local-cpa-step9-mode');
 const localCpaStep9ModeButtons = Array.from(document.querySelectorAll('[data-local-cpa-step9-mode]'));
@@ -1334,6 +1340,9 @@ function collectSettingsPayload() {
     heroSmsEnabled: getSelectedHeroSmsEnabled(),
     heroSmsApiKey: inputHeroSmsApiKey.value.trim(),
     heroSmsCountry: inputHeroSmsCountry.value.trim(),
+    heroSmsMaxActivationAgeMinutes: normalizeHeroSmsMaxActivationAgeMinutes(inputHeroSmsMaxActivationAgeMinutes?.value),
+    heroSmsMaxRetryCount: normalizeHeroSmsMaxRetryCount(inputHeroSmsMaxRetryCount?.value),
+    heroSmsRecoveryStrategy: normalizeHeroSmsRecoveryStrategy(selectHeroSmsRecoveryStrategy?.value),
     localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
     sub2apiUrl: inputSub2ApiUrl.value.trim(),
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
@@ -1387,6 +1396,28 @@ function normalizeLocalCpaStep9Mode(value = '') {
 function getSelectedHeroSmsEnabled() {
   const activeButton = heroSmsEnabledButtons.find((button) => button.classList.contains('is-active'));
   return String(activeButton?.dataset.heroSmsEnabled) === 'true';
+}
+
+function normalizeHeroSmsMaxActivationAgeMinutes(value) {
+  const numeric = Math.floor(Number(value) || 0);
+  if (!numeric) {
+    return 5;
+  }
+  return Math.min(60, Math.max(1, numeric));
+}
+
+function normalizeHeroSmsMaxRetryCount(value) {
+  const numeric = Math.floor(Number(value) || 0);
+  if (!numeric) {
+    return 3;
+  }
+  return Math.min(10, Math.max(1, numeric));
+}
+
+function normalizeHeroSmsRecoveryStrategy(value = '') {
+  return String(value || '').trim().toLowerCase() === 'reload_current'
+    ? 'reload_current'
+    : 'open_add_phone';
 }
 
 function setHeroSmsEnabled(enabled) {
@@ -1721,6 +1752,9 @@ function applySettingsState(state) {
   setHeroSmsEnabled(state?.heroSmsEnabled);
   inputHeroSmsApiKey.value = state?.heroSmsApiKey || '';
   inputHeroSmsCountry.value = state?.heroSmsCountry || '';
+  inputHeroSmsMaxActivationAgeMinutes.value = String(normalizeHeroSmsMaxActivationAgeMinutes(state?.heroSmsMaxActivationAgeMinutes));
+  inputHeroSmsMaxRetryCount.value = String(normalizeHeroSmsMaxRetryCount(state?.heroSmsMaxRetryCount));
+  selectHeroSmsRecoveryStrategy.value = normalizeHeroSmsRecoveryStrategy(state?.heroSmsRecoveryStrategy);
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
   selectPanelMode.value = state?.panelMode || 'cpa';
   inputSub2ApiUrl.value = state?.sub2apiUrl || '';
@@ -3644,6 +3678,31 @@ inputHeroSmsCountry?.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputHeroSmsCountry?.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputHeroSmsMaxActivationAgeMinutes?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsMaxActivationAgeMinutes?.addEventListener('blur', () => {
+  inputHeroSmsMaxActivationAgeMinutes.value = String(
+    normalizeHeroSmsMaxActivationAgeMinutes(inputHeroSmsMaxActivationAgeMinutes.value)
+  );
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputHeroSmsMaxRetryCount?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsMaxRetryCount?.addEventListener('blur', () => {
+  inputHeroSmsMaxRetryCount.value = String(
+    normalizeHeroSmsMaxRetryCount(inputHeroSmsMaxRetryCount.value)
+  );
+  saveSettings({ silent: true }).catch(() => { });
+});
+selectHeroSmsRecoveryStrategy?.addEventListener('change', () => {
+  selectHeroSmsRecoveryStrategy.value = normalizeHeroSmsRecoveryStrategy(selectHeroSmsRecoveryStrategy.value);
+  markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
 

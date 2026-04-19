@@ -148,6 +148,9 @@ const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP6_MAX_ATTEMPTS = 3;
 const STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS = 8;
 const HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS = 3;
+const HERO_SMS_MAX_ACTIVATION_AGE_MINUTES = 5;
+const HERO_SMS_RECOVERY_STRATEGY_OPEN_ADD_PHONE = 'open_add_phone';
+const HERO_SMS_RECOVERY_STRATEGY_RELOAD_CURRENT = 'reload_current';
 const OAUTH_FLOW_TIMEOUT_MS = 6 * 60 * 1000;
 const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
@@ -242,6 +245,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   heroSmsEnabled: false,
   heroSmsApiKey: '',
   heroSmsCountry: '',
+  heroSmsMaxActivationAgeMinutes: HERO_SMS_MAX_ACTIVATION_AGE_MINUTES,
+  heroSmsMaxRetryCount: HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS,
+  heroSmsRecoveryStrategy: HERO_SMS_RECOVERY_STRATEGY_OPEN_ADD_PHONE,
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
   accountRunHistoryTextEnabled: false,
@@ -823,6 +829,30 @@ function normalizeHeroSmsCountry(value = '') {
   return String(value || '').trim().replace(/[^\d]/g, '');
 }
 
+function normalizeHeroSmsMaxActivationAgeMinutes(value) {
+  const numeric = Math.floor(Number(value) || 0);
+  if (!numeric) {
+    return HERO_SMS_MAX_ACTIVATION_AGE_MINUTES;
+  }
+  return Math.min(60, Math.max(1, numeric));
+}
+
+function normalizeHeroSmsMaxRetryCount(value) {
+  const numeric = Math.floor(Number(value) || 0);
+  if (!numeric) {
+    return HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS;
+  }
+  return Math.min(10, Math.max(1, numeric));
+}
+
+function normalizeHeroSmsRecoveryStrategy(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === HERO_SMS_RECOVERY_STRATEGY_RELOAD_CURRENT) {
+    return HERO_SMS_RECOVERY_STRATEGY_RELOAD_CURRENT;
+  }
+  return HERO_SMS_RECOVERY_STRATEGY_OPEN_ADD_PHONE;
+}
+
 function resolveCloudflareTempEmailPollTargetEmail(state = {}, pollPayload = {}, config = getCloudflareTempEmailConfig(state)) {
   const configuredReceiveMailbox = normalizeCloudflareTempEmailReceiveMailbox(config.receiveMailbox);
   if (configuredReceiveMailbox) {
@@ -882,6 +912,12 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '').trim();
     case 'heroSmsCountry':
       return normalizeHeroSmsCountry(value);
+    case 'heroSmsMaxActivationAgeMinutes':
+      return normalizeHeroSmsMaxActivationAgeMinutes(value);
+    case 'heroSmsMaxRetryCount':
+      return normalizeHeroSmsMaxRetryCount(value);
+    case 'heroSmsRecoveryStrategy':
+      return normalizeHeroSmsRecoveryStrategy(value);
     case 'autoDeleteUsedIcloudAlias':
     case 'accountRunHistoryTextEnabled':
       return Boolean(value);
