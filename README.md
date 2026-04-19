@@ -4,45 +4,7 @@
 
 当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / Inbucket / Hotmail 协助获取验证码。
 
-## 插件效果
-
-一百五十个号，一个401：
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/交流群.jpg" alt="QQ交流群，便于大家交流" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/十轮自动.png" alt="最新版本运行日志" width="100%" />
-    </td>
-  </tr>
-</table>
-
-## 打赏一下
-
-佬们觉得好用的话，也可以打赏小弟一杯奶茶哦
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/支付宝.jpg" alt="支付宝收款码" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/微信.png" alt="微信收款码" width="100%" />
-    </td>
-  </tr>
-</table>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=QLHazyCoder%2Fcodex-oauth-automation-extension&type=timeline&logscale&legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=QLHazyCoder/codex-oauth-automation-extension&type=timeline&logscale&theme=dark&legend=top-left" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=QLHazyCoder/codex-oauth-automation-extension&type=timeline&logscale&legend=top-left" />
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=QLHazyCoder/codex-oauth-automation-extension&type=timeline&logscale&legend=top-left" />
-  </picture>
-</a>
+这个 fork 主要面向自用维护，README 只保留安装、配置和流程说明，不包含交流群、打赏或仓库推广内容。
 
 ## 当前能力
 
