@@ -41,7 +41,7 @@
           return false;
         }
         const text = typeof getActionText === 'function' ? getActionText(element) : '';
-        return /重试|try\s+again/i.test(text);
+        return /重试|再試行|もう一度試す|try\s+again/i.test(text);
       }) || null;
     }
 

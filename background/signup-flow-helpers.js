@@ -22,10 +22,16 @@
       waitForTabUrlMatch,
     } = deps;
 
-    async function openSignupEntryTab(step = 1) {
+    async function openSignupEntryTab(step = 1, options = {}) {
+      const {
+        refreshFingerprintProfile = false,
+        reloadIfSameUrl = refreshFingerprintProfile,
+      } = options;
       const tabId = await reuseOrCreateTab('signup-page', SIGNUP_ENTRY_URL, {
         inject: SIGNUP_PAGE_INJECT_FILES,
         injectSource: 'signup-page',
+        refreshFingerprintProfile,
+        reloadIfSameUrl,
       });
 
       await ensureContentScriptReadyOnTab('signup-page', tabId, {
@@ -59,6 +65,37 @@
       return { tabId, result: result || {} };
     }
 
+    async function recoverSignupAuthRetryPageInTab(tabId, step = 2, flow = 'signup_entry') {
+      await ensureContentScriptReadyOnTab('signup-page', tabId, {
+        inject: SIGNUP_PAGE_INJECT_FILES,
+        injectSource: 'signup-page',
+        timeoutMs: 45000,
+        retryDelayMs: 900,
+        logMessage: `步骤 ${step}：认证页仍在加载，正在等待重试页恢复能力就绪...`,
+      });
+
+      const result = await sendToContentScriptResilient('signup-page', {
+        type: 'RECOVER_AUTH_RETRY_PAGE',
+        step,
+        source: 'background',
+        payload: {
+          flow,
+          step,
+          logLabel: `步骤 ${step}：检测到认证页进入重试状态，正在点击“重试”恢复`,
+        },
+      }, {
+        timeoutMs: 20000,
+        retryDelayMs: 700,
+        logMessage: `步骤 ${step}：认证页重试状态仍在切换，等待恢复完成...`,
+      });
+
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+
+      return result || {};
+    }
+
     function resolveSignupPostEmailState(rawUrl) {
       if (isSignupPasswordPageUrl(rawUrl)) {
         return 'password_page';
@@ -67,6 +104,10 @@
         return 'verification_page';
       }
       return '';
+    }
+
+    function isSignupEntryRecoveryUrl(rawUrl) {
+      return /\/create-account(?:[/?#]|$)/i.test(String(rawUrl || ''));
     }
 
     async function ensureSignupPostEmailPageReadyInTab(tabId, step = 2, options = {}) {
@@ -80,11 +121,31 @@
           retryDelayMs: 300,
         });
         if (!matchedTab) {
-          throw new Error('等待邮箱提交后的页面跳转超时，请检查页面是否仍停留在邮箱输入页。');
-        }
+          const retryRecovery = await recoverSignupAuthRetryPageInTab(tabId, step, 'signup_entry').catch(() => null);
 
-        landingUrl = matchedTab.url || '';
-        landingState = resolveSignupPostEmailState(landingUrl);
+          try {
+            const currentTab = await chrome.tabs.get(tabId);
+            landingUrl = currentTab?.url || '';
+            landingState = resolveSignupPostEmailState(landingUrl);
+          } catch {
+            landingUrl = '';
+            landingState = '';
+          }
+
+          if (!landingState && (retryRecovery?.recovered || isSignupEntryRecoveryUrl(landingUrl))) {
+            return {
+              ready: false,
+              state: 'entry_page_recovered',
+              url: landingUrl || '',
+              recovered: true,
+            };
+          }
+
+          throw new Error('等待邮箱提交后的页面跳转超时，请检查页面是否仍停留在邮箱输入页。');
+        } else {
+          landingUrl = matchedTab.url || '';
+          landingState = resolveSignupPostEmailState(landingUrl);
+        }
       }
 
       if (!landingState) {
@@ -217,6 +278,7 @@
     return {
       ensureSignupEntryPageReady,
       ensureSignupPostEmailPageReadyInTab,
+      recoverSignupAuthRetryPageInTab,
       finalizeSignupPasswordSubmitInTab,
       ensureSignupPasswordPageReadyInTab,
       openSignupEntryTab,

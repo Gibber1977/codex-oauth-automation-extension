@@ -53,6 +53,7 @@ function extractFunction(name) {
 const bundle = [
   extractFunction('getPageTextSnapshot'),
   extractFunction('getLoginVerificationDisplayedEmail'),
+  extractFunction('isChatgptOnboardingPage'),
   extractFunction('inspectLoginAuthState'),
   extractFunction('normalizeStep6Snapshot'),
 ].join('\n');
@@ -111,9 +112,14 @@ function isOAuthConsentPage() {
   return ${JSON.stringify(Boolean(overrides.oauthConsentPage))};
 }
 
+function getPageTextSnapshot() {
+  return ${JSON.stringify(overrides.pageText || '')};
+}
+
 ${bundle}
 
 return {
+  isChatgptOnboardingPage,
   inspectLoginAuthState,
   normalizeStep6Snapshot,
 };
@@ -158,6 +164,21 @@ return {
   });
 
   assert.strictEqual(snapshot.state, 'unknown', '第六步应忽略 oauth_consent_page 状态');
+}
+
+{
+  const api = createApi({
+    href: 'https://chatgpt.com/',
+    pathname: '/',
+    pageText: '是什么促使你使用 ChatGPT？ 下一步 跳过',
+  });
+
+  const snapshot = api.inspectLoginAuthState();
+  assert.strictEqual(
+    snapshot.state,
+    'chatgpt_onboarding_page',
+    '第六步应识别 ChatGPT 已登录 onboarding 页'
+  );
 }
 
 assert.ok(

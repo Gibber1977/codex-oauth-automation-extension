@@ -122,6 +122,29 @@
             title="显示管理密钥"></button>
         </div>
       </div>
+      <div class="data-row" id="row-hero-sms-enabled">
+        <span class="data-label">Hero-SMS</span>
+        <div id="hero-sms-enabled-group" class="choice-group" role="group" aria-label="是否启用短信验证">
+          <button type="button" class="choice-btn" data-hero-sms-enabled="true">启用</button>
+          <button type="button" class="choice-btn" data-hero-sms-enabled="false">禁用</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-hero-sms-api-key">
+        <span class="data-label">SMS-APIKey</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-hero-sms-api-key" class="data-input data-input-with-icon"
+            placeholder="Hero-SMS API Key" />
+          <button id="btn-toggle-hero-sms-api-key" class="input-icon-btn" type="button" aria-label="显示 SMS API Key"
+            title="显示 SMS API Key"></button>
+        </div>
+      </div>
+      <div class="data-row" id="row-hero-sms-country">
+        <span class="data-label">SMS-国家</span>
+        <div class="data-inline">
+          <input type="text" id="input-hero-sms-country" class="data-input" placeholder="国家代码，如 52" />
+          <button id="btn-query-hero-sms-countries" class="btn btn-outline btn-sm data-inline-btn" type="button">查询</button>
+        </div>
+      </div>
       <div class="data-row" id="row-local-cpa-step9-mode">
         <span class="data-label">本地 CPA</span>
         <div id="local-cpa-step9-mode-group" class="choice-group" role="group" aria-label="本地 CPA 第 10 步策略">

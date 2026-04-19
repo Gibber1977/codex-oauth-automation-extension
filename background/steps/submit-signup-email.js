@@ -15,6 +15,7 @@
       sendToContentScriptResilient,
       SIGNUP_PAGE_INJECT_FILES,
     } = deps;
+    const STEP2_ENTRY_RECOVERY_MAX_ATTEMPTS = 2;
 
     async function executeStep2(state) {
       const resolvedEmail = await resolveSignupEmailForFlow(state);
@@ -34,35 +35,51 @@
         });
       }
 
-      const step2Result = await sendToContentScriptResilient('signup-page', {
-        type: 'EXECUTE_STEP',
-        step: 2,
-        source: 'background',
-        payload: { email: resolvedEmail },
-      }, {
-        timeoutMs: 20000,
-        retryDelayMs: 700,
-        logMessage: '步骤 2：官网注册入口正在切换，等待页面恢复后继续输入邮箱...',
-      });
+      let entryRecoveryAttempts = 0;
+      while (entryRecoveryAttempts <= STEP2_ENTRY_RECOVERY_MAX_ATTEMPTS) {
+        const step2Result = await sendToContentScriptResilient('signup-page', {
+          type: 'EXECUTE_STEP',
+          step: 2,
+          source: 'background',
+          payload: { email: resolvedEmail },
+        }, {
+          timeoutMs: 20000,
+          retryDelayMs: 700,
+          logMessage: '步骤 2：官网注册入口正在切换，等待页面恢复后继续输入邮箱...',
+        });
 
-      if (step2Result?.error) {
-        throw new Error(step2Result.error);
+        if (step2Result?.error) {
+          throw new Error(step2Result.error);
+        }
+
+        if (!step2Result?.alreadyOnPasswordPage) {
+          await addLog(`步骤 2：邮箱 ${resolvedEmail} 已提交，正在等待页面加载并确认下一步入口...`);
+        }
+
+        const landingResult = await ensureSignupPostEmailPageReadyInTab(signupTabId, 2, {
+          skipUrlWait: Boolean(step2Result?.alreadyOnPasswordPage),
+        });
+
+        if (landingResult?.state === 'entry_page_recovered') {
+          entryRecoveryAttempts += 1;
+          if (entryRecoveryAttempts > STEP2_ENTRY_RECOVERY_MAX_ATTEMPTS) {
+            throw new Error(`步骤 2：邮箱提交后连续 ${STEP2_ENTRY_RECOVERY_MAX_ATTEMPTS} 次撞上认证重试页，已自动恢复但仍未进入下一页。URL: ${landingResult?.url || 'unknown'}`);
+          }
+          await addLog(
+            `步骤 2：邮箱提交后进入 invalid_state/重试页，已自动恢复并准备重新提交邮箱（${entryRecoveryAttempts}/${STEP2_ENTRY_RECOVERY_MAX_ATTEMPTS}）...`,
+            'warn'
+          );
+          continue;
+        }
+
+        await completeStepFromBackground(2, {
+          email: resolvedEmail,
+          nextSignupState: landingResult?.state || 'password_page',
+          nextSignupUrl: landingResult?.url || step2Result?.url || '',
+          skippedPasswordStep: landingResult?.state === 'verification_page',
+        });
+        return;
       }
-
-      if (!step2Result?.alreadyOnPasswordPage) {
-        await addLog(`步骤 2：邮箱 ${resolvedEmail} 已提交，正在等待页面加载并确认下一步入口...`);
-      }
-
-      const landingResult = await ensureSignupPostEmailPageReadyInTab(signupTabId, 2, {
-        skipUrlWait: Boolean(step2Result?.alreadyOnPasswordPage),
-      });
-
-      await completeStepFromBackground(2, {
-        email: resolvedEmail,
-        nextSignupState: landingResult?.state || 'password_page',
-        nextSignupUrl: landingResult?.url || step2Result?.url || '',
-        skippedPasswordStep: landingResult?.state === 'verification_page',
-      });
     }
 
     return { executeStep2 };

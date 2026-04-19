@@ -6,6 +6,7 @@ importScripts(
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
   'background/signup-flow-helpers.js',
+  'background/fingerprint-run.js',
   'background/message-router.js',
   'background/verification-flow.js',
   'background/auto-run-controller.js',
@@ -30,6 +31,7 @@ importScripts(
   'luckmail-utils.js',
   'cloudflare-temp-email-utils.js',
   'icloud-utils.js',
+  'hero-sms-utils.js',
   'content/activation-utils.js'
 );
 
@@ -111,10 +113,17 @@ const {
   toNormalizedEmailSet,
 } = self.IcloudUtils;
 const {
+  cancelActivation: heroCancelSmsActivation,
+  findOrCreateSmsActivation,
+  finishActivation: heroFinishSmsActivation,
+  pollSmsVerificationCode,
+} = self.HeroSmsUtils;
+const {
   isRecoverableStep9AuthFailure,
 } = self.MultiPageActivationUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
+const HERO_SMS_PHONE_RECORDS_LOG_PATH_PREFIX = 'chrome.storage.local://heroSmsPhoneRecords';
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const ICLOUD_SETUP_URLS = [
   'https://setup.icloud.com.cn/setup/ws/1',
@@ -138,6 +147,7 @@ const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP6_MAX_ATTEMPTS = 3;
 const STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS = 8;
+const HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS = 3;
 const OAUTH_FLOW_TIMEOUT_MS = 6 * 60 * 1000;
 const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
@@ -229,6 +239,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   emailGenerator: 'duck',
+  heroSmsEnabled: false,
+  heroSmsApiKey: '',
+  heroSmsCountry: '',
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
   accountRunHistoryTextEnabled: false,
@@ -322,7 +335,11 @@ const DEFAULT_STATE = {
   loginVerificationRequestedAt: null,
   oauthFlowDeadlineAt: null,
   oauthFlowDeadlineSourceUrl: null,
+  currentFingerprintSeed: null,
+  currentFingerprintRunMarker: null,
   currentHotmailAccountId: null,
+  currentHeroSmsActivationId: null,
+  currentHeroSmsPhoneNumber: null,
   preferredIcloudHost: '',
 };
 
@@ -802,6 +819,10 @@ function normalizeCloudflareTempEmailReceiveMailbox(value = '') {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
 }
 
+function normalizeHeroSmsCountry(value = '') {
+  return String(value || '').trim().replace(/[^\d]/g, '');
+}
+
 function resolveCloudflareTempEmailPollTargetEmail(state = {}, pollPayload = {}, config = getCloudflareTempEmailConfig(state)) {
   const configuredReceiveMailbox = normalizeCloudflareTempEmailReceiveMailbox(config.receiveMailbox);
   if (configuredReceiveMailbox) {
@@ -855,6 +876,12 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeMail2925Mode(value);
     case 'emailGenerator':
       return normalizeEmailGenerator(value);
+    case 'heroSmsEnabled':
+      return Boolean(value);
+    case 'heroSmsApiKey':
+      return String(value || '').trim();
+    case 'heroSmsCountry':
+      return normalizeHeroSmsCountry(value);
     case 'autoDeleteUsedIcloudAlias':
     case 'accountRunHistoryTextEnabled':
       return Boolean(value);
@@ -3694,6 +3721,21 @@ function cancelPendingCommands(reason = STOP_ERROR_MESSAGE) {
 // ============================================================
 
 async function reuseOrCreateTab(source, url, options = {}) {
+  if (source === 'signup-page') {
+    const nextOptions = { ...options };
+    const state = await getState();
+    let fingerprintSeed = String(state.currentFingerprintSeed || '').trim();
+    if (nextOptions.refreshFingerprintProfile || !fingerprintSeed) {
+      fingerprintSeed = crypto.randomUUID().replace(/-/g, '');
+      await setState({
+        currentFingerprintSeed: fingerprintSeed,
+      });
+    }
+    nextOptions.windowNameValue = `__MPFP__:${fingerprintSeed}`;
+    delete nextOptions.refreshFingerprintProfile;
+    return tabRuntime.reuseOrCreateTab(source, url, nextOptions);
+  }
+
   return tabRuntime.reuseOrCreateTab(source, url, options);
 }
 
@@ -3915,6 +3957,7 @@ function getLoginAuthStateLabel(state) {
     case 'verification_page': return '登录验证码页';
     case 'password_page': return '密码页';
     case 'email_page': return '邮箱输入页';
+    case 'chatgpt_onboarding_page': return 'ChatGPT 已登录引导页';
     case 'login_timeout_error_page': return '登录超时报错页';
     case 'oauth_consent_page': return 'OAuth 授权页';
     case 'add_phone_page': return '手机号页';
@@ -4815,6 +4858,18 @@ async function handleStepData(step, payload) {
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       const latestState = await getState();
+      if (latestState.heroSmsApiKey && latestState.currentHeroSmsActivationId) {
+        try {
+          await heroFinishSmsActivation(latestState.heroSmsApiKey, latestState.currentHeroSmsActivationId);
+          await addLog(`步骤 10：已调用 Hero-SMS 完成激活（ID: ${latestState.currentHeroSmsActivationId}）。`, 'info');
+        } catch (err) {
+          await addLog(`步骤 10：调用 Hero-SMS 完成激活失败：${getErrorMessage(err)}`, 'warn');
+        }
+      }
+      await setState({
+        currentHeroSmsActivationId: null,
+        currentHeroSmsPhoneNumber: null,
+      });
       if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
         await patchHotmailAccount(latestState.currentHotmailAccountId, {
           used: true,
@@ -5926,6 +5981,12 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   SIGNUP_PAGE_INJECT_FILES,
   waitForTabUrlMatch,
 });
+const fingerprintRunHelpers = self.MultiPageBackgroundFingerprintRun?.createFingerprintRunHelpers({
+  getNow: () => Date.now(),
+  getState,
+  randomUUID: () => crypto.randomUUID(),
+  setState,
+});
 const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.createVerificationFlowHelpers({
   addLog,
   chrome,
@@ -5959,6 +6020,7 @@ const step1Executor = self.MultiPageBackgroundStep1?.createStep1Executor({
   addLog,
   completeStepFromBackground,
   openSignupEntryTab,
+  prepareFingerprintProfileForStep1: fingerprintRunHelpers?.prepareFingerprintProfileForStep1,
 });
 const step2Executor = self.MultiPageBackgroundStep2?.createStep2Executor({
   addLog,
@@ -6016,6 +6078,7 @@ const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
 const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   addLog,
   completeStepFromBackground,
+  ensureContentScriptReadyOnTab,
   getErrorMessage,
   getLoginAuthStateLabel,
   getOAuthFlowStepTimeoutMs,
@@ -6024,34 +6087,45 @@ const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   isStep6RecoverableResult,
   isStep6SuccessResult,
   refreshOAuthUrlBeforeStep6,
+  runPreStep6CookieCleanup,
   reuseOrCreateTab,
   sendToContentScriptResilient,
+  SIGNUP_PAGE_INJECT_FILES,
   startOAuthFlowTimeoutWindow,
   STEP6_MAX_ATTEMPTS,
   throwIfStopped,
 });
 const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   addLog,
+  cancelHeroSmsActivation: heroCancelSmsActivation,
   chrome,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
+  completeStepFromBackground,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
+  ensureContentScriptReadyOnTab,
   ensureStep8VerificationPageReady,
+  findOrCreateSmsActivation,
   getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getPanelMode,
   getMailConfig,
   getState,
   getTabId,
+  HERO_SMS_PHONE_RECORDS_LOG_PATH_PREFIX,
   HOTMAIL_PROVIDER,
+  HERO_SMS_POLL_TIMEOUT_MAX_ATTEMPTS,
   isTabAlive,
   isVerificationMailPollingError,
   LUCKMAIL_PROVIDER,
+  pollSmsVerificationCode,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   rerunStep7ForStep8Recovery: (...args) => rerunStep7ForStep8Recovery(...args),
   reuseOrCreateTab,
+  sendToContentScriptResilient,
   setState,
   shouldUseCustomRegistrationEmail,
   sleepWithStop,
+  SIGNUP_PAGE_INJECT_FILES,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
   STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
   throwIfStopped,
@@ -6195,8 +6269,8 @@ async function requestSub2ApiOAuthUrl(state, options = {}) {
   return panelBridge.requestSub2ApiOAuthUrl(state, options);
 }
 
-async function openSignupEntryTab(step = 1) {
-  return signupFlowHelpers.openSignupEntryTab(step);
+async function openSignupEntryTab(step = 1, options = {}) {
+  return signupFlowHelpers.openSignupEntryTab(step, options);
 }
 
 async function ensureSignupEntryPageReady(step = 1) {
@@ -6459,16 +6533,25 @@ async function removeCookieDirectly(cookie) {
   }
 }
 
-async function runPreStep6CookieCleanup() {
-  await addLog(
-    `步骤 6：开始前等待 ${Math.round(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS / 1000)} 秒，然后直接删除 ChatGPT / OpenAI cookies...`,
-    'info'
-  );
+async function runPreStep6CookieCleanup(options = {}) {
+  const {
+    logStep = 6,
+    waitMs = STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS,
+  } = options;
+  const normalizedWaitMs = Math.max(0, Number(waitMs) || 0);
 
-  await sleepWithStop(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS);
+  if (normalizedWaitMs > 0) {
+    await addLog(
+      `步骤 ${logStep}：开始前等待 ${Math.round(normalizedWaitMs / 1000)} 秒，然后直接删除 ChatGPT / OpenAI cookies...`,
+      'info'
+    );
+    await sleepWithStop(normalizedWaitMs);
+  } else {
+    await addLog(`步骤 ${logStep}：正在快速清理 ChatGPT / OpenAI 登录 cookies...`, 'info');
+  }
 
   if (!chrome.cookies?.getAll || !chrome.cookies?.remove) {
-    await addLog('步骤 6：当前浏览器不支持 cookies API，无法直接删除 cookies。', 'warn');
+    await addLog(`步骤 ${logStep}：当前浏览器不支持 cookies API，无法直接删除 cookies。`, 'warn');
     return;
   }
 
@@ -6489,11 +6572,11 @@ async function runPreStep6CookieCleanup() {
         origins: PRE_LOGIN_COOKIE_CLEAR_ORIGINS,
       });
     } catch (err) {
-      await addLog(`步骤 6：browsingData 补扫 cookies 失败：${getErrorMessage(err)}`, 'warn');
+      await addLog(`步骤 ${logStep}：browsingData 补扫 cookies 失败：${getErrorMessage(err)}`, 'warn');
     }
   }
 
-  await addLog(`步骤 6：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies，准备继续获取链接并登录。`, 'ok');
+  await addLog(`步骤 ${logStep}：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies，准备继续获取链接并登录。`, 'ok');
 }
 
 // ============================================================

@@ -84,6 +84,71 @@ test('step 2 keeps password flow when landing on password page', async () => {
   ]);
 });
 
+test('step 2 retries current email submission after invalid_state retry page is recovered', async () => {
+  const completedPayloads = [];
+  const logs = [];
+  const sentMessages = [];
+  let landingAttempts = 0;
+
+  const executor = step2Api.createStep2Executor({
+    addLog: async (message, level = 'info') => {
+      logs.push({ message, level });
+    },
+    chrome: { tabs: { update: async () => {} } },
+    completeStepFromBackground: async (step, payload) => {
+      completedPayloads.push({ step, payload });
+    },
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureSignupEntryPageReady: async () => ({ tabId: 13 }),
+    ensureSignupPostEmailPageReadyInTab: async () => {
+      landingAttempts += 1;
+      if (landingAttempts === 1) {
+        return {
+          ready: false,
+          state: 'entry_page_recovered',
+          url: 'https://auth.openai.com/create-account',
+          recovered: true,
+        };
+      }
+      return {
+        ready: true,
+        state: 'password_page',
+        url: 'https://auth.openai.com/create-account/password',
+      };
+    },
+    getTabId: async () => 13,
+    isTabAlive: async () => true,
+    resolveSignupEmailForFlow: async () => 'user@example.com',
+    sendToContentScriptResilient: async (_source, message) => {
+      sentMessages.push(message);
+      return { submitted: true };
+    },
+    SIGNUP_PAGE_INJECT_FILES: [],
+  });
+
+  await executor.executeStep2({ email: 'user@example.com' });
+
+  assert.equal(
+    sentMessages.filter((message) => message.type === 'EXECUTE_STEP' && message.step === 2).length,
+    2
+  );
+  assert.equal(
+    logs.some(({ message }) => /invalid_state\/重试页/.test(message)),
+    true
+  );
+  assert.deepStrictEqual(completedPayloads, [
+    {
+      step: 2,
+      payload: {
+        email: 'user@example.com',
+        nextSignupState: 'password_page',
+        nextSignupUrl: 'https://auth.openai.com/create-account/password',
+        skippedPasswordStep: false,
+      },
+    },
+  ]);
+});
+
 test('signup flow helper recognizes email verification page as post-email landing page', async () => {
   let ensureCalls = 0;
   let passwordReadyChecks = 0;
@@ -131,6 +196,103 @@ test('signup flow helper recognizes email verification page as post-email landin
   });
   assert.equal(ensureCalls, 1);
   assert.equal(passwordReadyChecks, 0);
+});
+
+test('signup flow helper recovers invalid_state retry page and returns recovered entry page state', async () => {
+  let ensureCalls = 0;
+  const sentMessages = [];
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    buildGeneratedAliasEmail: () => '',
+    chrome: {
+      tabs: {
+        get: async () => ({
+          id: 41,
+          url: 'https://auth.openai.com/create-account',
+        }),
+      },
+    },
+    ensureContentScriptReadyOnTab: async () => {
+      ensureCalls += 1;
+    },
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: (url) => /\/email-verification(?:[/?#]|$)/i.test(url || ''),
+    isSignupPasswordPageUrl: (url) => /\/create-account\/password(?:[/?#]|$)/i.test(url || ''),
+    reuseOrCreateTab: async () => 41,
+    sendToContentScriptResilient: async (_source, message) => {
+      sentMessages.push(message);
+      if (message.type === 'RECOVER_AUTH_RETRY_PAGE') {
+        return { recovered: true, clickCount: 1, url: 'https://auth.openai.com/create-account' };
+      }
+      return {};
+    },
+    setEmailState: async () => {},
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    SIGNUP_PAGE_INJECT_FILES: [],
+    waitForTabUrlMatch: async () => null,
+  });
+
+  const result = await helpers.ensureSignupPostEmailPageReadyInTab(41, 2);
+
+  assert.deepStrictEqual(result, {
+    ready: false,
+    state: 'entry_page_recovered',
+    url: 'https://auth.openai.com/create-account',
+    recovered: true,
+  });
+  assert.equal(ensureCalls, 1);
+  assert.equal(sentMessages.some((message) => message.type === 'RECOVER_AUTH_RETRY_PAGE'), true);
+});
+
+test('signup flow helper treats create-account landing after retry as recovered entry page even without recovered flag', async () => {
+  let ensureCalls = 0;
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    buildGeneratedAliasEmail: () => '',
+    chrome: {
+      tabs: {
+        get: async () => ({
+          id: 42,
+          url: 'https://auth.openai.com/create-account',
+        }),
+      },
+    },
+    ensureContentScriptReadyOnTab: async () => {
+      ensureCalls += 1;
+    },
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: (url) => /\/email-verification(?:[/?#]|$)/i.test(url || ''),
+    isSignupPasswordPageUrl: (url) => /\/create-account\/password(?:[/?#]|$)/i.test(url || ''),
+    reuseOrCreateTab: async () => 42,
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'RECOVER_AUTH_RETRY_PAGE') {
+        return { recovered: false, clickCount: 1, url: 'https://auth.openai.com/create-account' };
+      }
+      return {};
+    },
+    setEmailState: async () => {},
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    SIGNUP_PAGE_INJECT_FILES: [],
+    waitForTabUrlMatch: async () => null,
+  });
+
+  const result = await helpers.ensureSignupPostEmailPageReadyInTab(42, 2);
+
+  assert.deepStrictEqual(result, {
+    ready: false,
+    state: 'entry_page_recovered',
+    url: 'https://auth.openai.com/create-account',
+    recovered: true,
+  });
+  assert.equal(ensureCalls, 1);
 });
 
 test('signup flow helper reuses existing managed alias email when it is still compatible', async () => {

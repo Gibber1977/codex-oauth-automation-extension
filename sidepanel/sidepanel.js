@@ -68,6 +68,14 @@ const rowVpsUrl = document.getElementById('row-vps-url');
 const inputVpsUrl = document.getElementById('input-vps-url');
 const rowVpsPassword = document.getElementById('row-vps-password');
 const inputVpsPassword = document.getElementById('input-vps-password');
+const rowHeroSmsEnabled = document.getElementById('row-hero-sms-enabled');
+const heroSmsEnabledButtons = Array.from(document.querySelectorAll('[data-hero-sms-enabled]'));
+const rowHeroSmsApiKey = document.getElementById('row-hero-sms-api-key');
+const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
+const btnToggleHeroSmsApiKey = document.getElementById('btn-toggle-hero-sms-api-key');
+const rowHeroSmsCountry = document.getElementById('row-hero-sms-country');
+const inputHeroSmsCountry = document.getElementById('input-hero-sms-country');
+const btnQueryHeroSmsCountries = document.getElementById('btn-query-hero-sms-countries');
 const rowLocalCpaStep9Mode = document.getElementById('row-local-cpa-step9-mode');
 const localCpaStep9ModeButtons = Array.from(document.querySelectorAll('[data-local-cpa-step9-mode]'));
 const rowSub2ApiUrl = document.getElementById('row-sub2api-url');
@@ -1323,6 +1331,9 @@ function collectSettingsPayload() {
     panelMode: selectPanelMode.value,
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
+    heroSmsEnabled: getSelectedHeroSmsEnabled(),
+    heroSmsApiKey: inputHeroSmsApiKey.value.trim(),
+    heroSmsCountry: inputHeroSmsCountry.value.trim(),
     localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
     sub2apiUrl: inputSub2ApiUrl.value.trim(),
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
@@ -1371,6 +1382,20 @@ function normalizeLocalCpaStep9Mode(value = '') {
   return String(value || '').trim().toLowerCase() === 'bypass'
     ? 'bypass'
     : DEFAULT_LOCAL_CPA_STEP9_MODE;
+}
+
+function getSelectedHeroSmsEnabled() {
+  const activeButton = heroSmsEnabledButtons.find((button) => button.classList.contains('is-active'));
+  return String(activeButton?.dataset.heroSmsEnabled) === 'true';
+}
+
+function setHeroSmsEnabled(enabled) {
+  const resolved = Boolean(enabled);
+  heroSmsEnabledButtons.forEach((button) => {
+    const active = String(button.dataset.heroSmsEnabled) === String(resolved);
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 function normalizeMail2925Mode(value = '') {
@@ -1693,6 +1718,9 @@ function applySettingsState(state) {
   syncPasswordField(state || {});
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
+  setHeroSmsEnabled(state?.heroSmsEnabled);
+  inputHeroSmsApiKey.value = state?.heroSmsApiKey || '';
+  inputHeroSmsCountry.value = state?.heroSmsCountry || '';
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
   selectPanelMode.value = state?.panelMode || 'cpa';
   inputSub2ApiUrl.value = state?.sub2apiUrl || '';
@@ -2534,6 +2562,9 @@ function updatePanelModeUI() {
   const useSub2Api = selectPanelMode.value === 'sub2api';
   rowVpsUrl.style.display = useSub2Api ? 'none' : '';
   rowVpsPassword.style.display = useSub2Api ? 'none' : '';
+  rowHeroSmsEnabled.style.display = '';
+  rowHeroSmsApiKey.style.display = getSelectedHeroSmsEnabled() ? '' : 'none';
+  rowHeroSmsCountry.style.display = getSelectedHeroSmsEnabled() ? '' : 'none';
   rowLocalCpaStep9Mode.style.display = useSub2Api ? 'none' : '';
   rowSub2ApiUrl.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiEmail.style.display = useSub2Api ? '' : 'none';
@@ -3121,6 +3152,13 @@ function syncVpsPasswordToggleLabel() {
   });
 }
 
+function syncHeroSmsApiKeyToggleLabel() {
+  syncToggleButtonLabel(btnToggleHeroSmsApiKey, inputHeroSmsApiKey, {
+    show: '显示 SMS API Key',
+    hide: '隐藏 SMS API Key',
+  });
+}
+
 async function maybeTakeoverAutoRun(actionLabel) {
   if (!isAutoRunPausedPhase()) {
     return true;
@@ -3258,6 +3296,13 @@ btnToggleVpsPassword.addEventListener('click', () => {
   inputVpsPassword.type = inputVpsPassword.type === 'password' ? 'text' : 'password';
   syncVpsPasswordToggleLabel();
 });
+btnToggleHeroSmsApiKey?.addEventListener('click', () => {
+  inputHeroSmsApiKey.type = inputHeroSmsApiKey.type === 'password' ? 'text' : 'password';
+  syncHeroSmsApiKeyToggleLabel();
+});
+btnQueryHeroSmsCountries?.addEventListener('click', () => {
+  openExternalUrl('https://hero-sms.com/stubs/handler_api.php?action=getCountries');
+});
 
 btnMailLogin?.addEventListener('click', async () => {
   const config = getMailProviderLoginConfig();
@@ -3280,6 +3325,19 @@ localCpaStep9ModeButtons.forEach((button) => {
       return;
     }
     setLocalCpaStep9Mode(nextMode);
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => { });
+  });
+});
+
+heroSmsEnabledButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const nextEnabled = String(button.dataset.heroSmsEnabled) === 'true';
+    if (getSelectedHeroSmsEnabled() === nextEnabled) {
+      return;
+    }
+    setHeroSmsEnabled(nextEnabled);
+    updatePanelModeUI();
     markSettingsDirty(true);
     saveSettings({ silent: true }).catch(() => { });
   });
@@ -3571,6 +3629,21 @@ inputVpsPassword.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputVpsPassword.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+inputHeroSmsApiKey?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsApiKey?.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputHeroSmsCountry?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsCountry?.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -4277,6 +4350,7 @@ restoreState().then(() => {
   syncPasswordToggleLabel();
   syncVpsUrlToggleLabel();
   syncVpsPasswordToggleLabel();
+  syncHeroSmsApiKeyToggleLabel();
   updatePanelModeUI();
   updateButtonStates();
   updateStatusDisplay(latestState);

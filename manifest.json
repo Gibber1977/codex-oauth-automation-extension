@@ -40,6 +40,20 @@
   "content_scripts": [
     {
       "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://auth0.openai.com/*",
+        "https://auth.openai.com/*",
+        "https://accounts.openai.com/*"
+      ],
+      "js": [
+        "content/fingerprint-bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
         "https://auth0.openai.com/*",
         "https://auth.openai.com/*",
         "https://accounts.openai.com/*"

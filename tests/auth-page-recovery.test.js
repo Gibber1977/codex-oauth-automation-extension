@@ -3,12 +3,16 @@ const assert = require('node:assert/strict');
 
 const { createAuthPageRecovery } = require('../content/auth-page-recovery.js');
 
-function createRetryButton() {
+function createRetryButton(options = {}) {
+  const {
+    actionName = 'Try again',
+    textContent = 'Try again',
+  } = options;
   return {
     disabled: false,
-    textContent: 'Try again',
+    textContent,
     getAttribute(name) {
-      if (name === 'data-dd-action-name') return 'Try again';
+      if (name === 'data-dd-action-name') return actionName;
       if (name === 'aria-disabled') return 'false';
       return '';
     },
@@ -16,7 +20,10 @@ function createRetryButton() {
 }
 
 function createRecoveryApi(state) {
-  const retryButton = createRetryButton();
+  const retryButton = createRetryButton({
+    actionName: state.retryActionName,
+    textContent: state.retryButtonText,
+  });
   global.location = {
     pathname: '/log-in',
     href: 'https://auth.openai.com/log-in',
@@ -24,7 +31,11 @@ function createRecoveryApi(state) {
   global.document = {
     title: 'Something went wrong',
     querySelector(selector) {
-      if (selector === 'button[data-dd-action-name="Try again"]' && state.retryVisible) {
+      if (
+        selector === 'button[data-dd-action-name="Try again"]'
+        && state.retryVisible
+        && retryButton.getAttribute('data-dd-action-name') === 'Try again'
+      ) {
         return retryButton;
       }
       return null;
@@ -35,7 +46,7 @@ function createRecoveryApi(state) {
   };
 
   return createAuthPageRecovery({
-    detailPattern: /timed out/i,
+    detailPattern: /timed out|invalid_state|验证过程中出错|verification encountered an error/i,
     getActionText: (element) => element?.textContent || '',
     getPageTextSnapshot: () => state.pageText,
     humanPause: async () => {},
@@ -79,6 +90,42 @@ test('auth page recovery detects retry page state', () => {
   assert.equal(snapshot.titleMatched, true);
   assert.equal(snapshot.detailMatched, false);
   assert.equal(snapshot.maxCheckAttemptsBlocked, false);
+});
+
+test('auth page recovery also detects invalid_state retry pages', () => {
+  const state = {
+    clickCount: 0,
+    pageText: '糟糕，出错了！ 验证过程中出错 (invalid_state)。请重试。',
+    retryVisible: true,
+  };
+  const api = createRecoveryApi(state);
+
+  const snapshot = api.getAuthTimeoutErrorPageState({
+    pathPatterns: [/\/log-in(?:[/?#]|$)/i],
+  });
+
+  assert.equal(Boolean(snapshot), true);
+  assert.equal(snapshot.titleMatched, true);
+  assert.equal(snapshot.detailMatched, true);
+});
+
+test('auth page recovery detects Japanese retry button text', () => {
+  const state = {
+    clickCount: 0,
+    pageText: '不明なエラーが発生しました。認証中にエラーが発生しました (invalid_state)。再試行してください。',
+    retryVisible: true,
+    retryActionName: '',
+    retryButtonText: 'もう一度試す',
+  };
+  const api = createRecoveryApi(state);
+
+  const snapshot = api.getAuthTimeoutErrorPageState({
+    pathPatterns: [/\/log-in(?:[/?#]|$)/i],
+  });
+
+  assert.equal(Boolean(snapshot), true);
+  assert.equal(snapshot.retryEnabled, true);
+  assert.equal(snapshot.detailMatched, true);
 });
 
 test('auth page recovery clicks retry and waits until page recovers', async () => {

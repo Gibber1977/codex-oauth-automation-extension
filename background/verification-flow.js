@@ -679,6 +679,18 @@
             [stateKey]: result.code,
           });
 
+          if (typeof options.afterSubmitSuccess === 'function') {
+            const callbackResult = await options.afterSubmitSuccess({
+              polledCode: result.code,
+              pollResult: result,
+              submitResult,
+              step,
+            });
+            if (callbackResult?.handled) {
+              return;
+            }
+          }
+
           await completeStepFromBackground(step, {
             emailTimestamp: result.emailTimestamp,
             code: result.code,

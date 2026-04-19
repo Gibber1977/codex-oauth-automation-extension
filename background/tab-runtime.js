@@ -227,6 +227,30 @@
       }
     }
 
+    function isManifestManagedSignupPageUrl(rawUrl) {
+      const url = String(rawUrl || '');
+      return /^https:\/\/(?:auth0\.openai\.com|auth\.openai\.com|accounts\.openai\.com)\//i.test(url);
+    }
+
+    function isSignupEntryPageUrl(rawUrl) {
+      const url = String(rawUrl || '');
+      return /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)(?:[/?#]|$)/i.test(url);
+    }
+
+    function hasReachedTargetUrlForSource(source, candidateUrl, targetUrl) {
+      if (!matchesSourceUrlFamily(source, candidateUrl, targetUrl)) {
+        return false;
+      }
+
+      // For OAuth/login flows we must not treat a lingering chatgpt.com tab as
+      // "ready" when the requested destination is an auth.openai.com page.
+      if (source === 'signup-page' && isManifestManagedSignupPageUrl(targetUrl)) {
+        return isManifestManagedSignupPageUrl(candidateUrl);
+      }
+
+      return true;
+    }
+
     async function waitForTabUrlFamily(source, tabId, referenceUrl, options = {}) {
       const { timeoutMs = 15000, retryDelayMs = 400 } = options;
       const start = Date.now();
@@ -234,7 +258,7 @@
       while (Date.now() - start < timeoutMs) {
         try {
           const tab = await chrome.tabs.get(tabId);
-          if (matchesSourceUrlFamily(source, tab.url, referenceUrl)) {
+          if (hasReachedTargetUrlForSource(source, tab.url, referenceUrl)) {
             return tab;
           }
         } catch {
@@ -325,6 +349,16 @@
         }
 
         try {
+          let shouldInjectFiles = true;
+          if (source === 'signup-page') {
+            try {
+              const currentTab = await chrome.tabs.get(tabId);
+              shouldInjectFiles = !isManifestManagedSignupPageUrl(currentTab?.url || '');
+            } catch {
+              shouldInjectFiles = true;
+            }
+          }
+
           if (injectSource) {
             await chrome.scripting.executeScript({
               target: { tabId },
@@ -335,10 +369,12 @@
             });
           }
 
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            files: inject,
-          });
+          if (shouldInjectFiles) {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              files: inject,
+            });
+          }
         } catch (err) {
           lastError = err;
           console.warn(LOG_PREFIX, `[ensureContentScriptReadyOnTab] inject attempt ${attempt} failed for ${source} tab=${tabId}: ${err?.message || err}`);
@@ -361,6 +397,56 @@
       }
 
       throw lastError || new Error(`${getSourceLabel(source)} 内容脚本长时间未就绪。`);
+    }
+
+    async function setTabWindowName(tabId, windowNameValue) {
+      if (!Number.isInteger(tabId) || typeof windowNameValue !== 'string') {
+        return;
+      }
+
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (nextWindowName) => {
+          try {
+            window.name = String(nextWindowName || '');
+          } catch (_) {
+            // Ignore blocked pages.
+          }
+        },
+        args: [windowNameValue],
+      });
+    }
+
+    function buildWindowNameBootstrapUrl(targetUrl, windowNameValue) {
+      if (!windowNameValue) return targetUrl;
+      const html = [
+        '<!doctype html>',
+        '<meta charset="utf-8">',
+        '<title>Redirecting...</title>',
+        '<script>',
+        `try { window.name = ${JSON.stringify(windowNameValue)}; } catch (_) {}`,
+        `location.replace(${JSON.stringify(targetUrl)});`,
+        '</script>',
+      ].join('');
+      return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+    }
+
+    async function waitForTabTargetUrl(source, tabId, targetUrl, timeoutMs = 30000) {
+      const matchedTab = await waitForTabUrlFamily(source, tabId, targetUrl, {
+        timeoutMs,
+        retryDelayMs: 300,
+      });
+      if (matchedTab) {
+        return matchedTab;
+      }
+
+      let currentUrl = 'unknown';
+      try {
+        currentUrl = (await chrome.tabs.get(tabId))?.url || 'unknown';
+      } catch (_) {
+        currentUrl = 'unknown';
+      }
+      throw new Error(`标签页未能跳转到目标页面。期望: ${targetUrl}；当前: ${currentUrl}`);
     }
 
     function getContentScriptResponseTimeoutMs(message) {
@@ -464,6 +550,9 @@
     }
 
     async function reuseOrCreateTab(source, url, options = {}) {
+      const windowNameValue = typeof options.windowNameValue === 'string'
+        ? options.windowNameValue
+        : '';
       const alive = await isTabAlive(source);
       if (alive) {
         const tabId = await getTabId(source);
@@ -473,8 +562,26 @@
         const shouldReloadOnReuse = sameUrl && options.reloadIfSameUrl;
 
         const registry = await getTabRegistry();
-        if (sameUrl) {
+        const shouldPreferFreshTab = source === 'signup-page'
+          && windowNameValue
+          && isManifestManagedSignupPageUrl(url)
+          && isSignupEntryPageUrl(currentTab?.url || '');
+        if (shouldPreferFreshTab) {
+          await chrome.tabs.remove(tabId).catch(() => { });
+          if (registry[source]?.tabId === tabId) {
+            registry[source] = null;
+            await setState({ tabRegistry: registry });
+          }
+          await addLog('认证页当前停留在 ChatGPT 入口页，步骤 7 将改为新建 OAuth 标签页，避免旧页复用干扰。', 'info');
+        }
+
+        if (shouldPreferFreshTab) {
+          // Fall through to the fresh-tab creation path below.
+        } else if (sameUrl) {
           await chrome.tabs.update(tabId, { active: true });
+          if (windowNameValue) {
+            await setTabWindowName(tabId, windowNameValue);
+          }
           if (shouldReloadOnReuse) {
             if (registry[source]) registry[source].ready = false;
             await setState({ tabRegistry: registry });
@@ -503,40 +610,52 @@
 
           await rememberSourceLastUrl(source, url);
           return tabId;
-        }
+        } else {
+          if (registry[source]) registry[source].ready = false;
+          await setState({ tabRegistry: registry });
+          const navigationUrl = buildWindowNameBootstrapUrl(url, windowNameValue);
+          if (!windowNameValue) {
+            await chrome.tabs.update(tabId, { url: navigationUrl, active: true });
+            await waitForTabUpdateComplete(tabId);
+          } else {
+            await chrome.tabs.update(tabId, { url: navigationUrl, active: true });
+            await waitForTabTargetUrl(source, tabId, url);
+          }
 
-        if (registry[source]) registry[source].ready = false;
-        await setState({ tabRegistry: registry });
-        await chrome.tabs.update(tabId, { url, active: true });
-
-        await waitForTabUpdateComplete(tabId);
-
-        if (options.inject) {
-          if (options.injectSource) {
+          if (options.inject) {
+            if (options.injectSource) {
+              await chrome.scripting.executeScript({
+                target: { tabId },
+                func: (injectedSource) => {
+                  window.__MULTIPAGE_SOURCE = injectedSource;
+                },
+                args: [options.injectSource],
+              });
+            }
             await chrome.scripting.executeScript({
               target: { tabId },
-              func: (injectedSource) => {
-                window.__MULTIPAGE_SOURCE = injectedSource;
-              },
-              args: [options.injectSource],
+              files: options.inject,
             });
           }
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            files: options.inject,
-          });
-        }
 
-        await sleepOrStop(500);
-        await rememberSourceLastUrl(source, url);
-        return tabId;
+          await sleepOrStop(500);
+          await rememberSourceLastUrl(source, url);
+          return tabId;
+        }
       }
 
       await closeConflictingTabsForSource(source, url);
-      const tab = await chrome.tabs.create({ url, active: true });
+      const navigationUrl = buildWindowNameBootstrapUrl(url, windowNameValue);
+      const tab = await chrome.tabs.create({ url: navigationUrl, active: true });
+
+      if (windowNameValue) {
+        await waitForTabTargetUrl(source, tab.id, url);
+      }
 
       if (options.inject) {
-        await waitForTabUpdateComplete(tab.id);
+        if (!windowNameValue) {
+          await waitForTabUpdateComplete(tab.id);
+        }
         if (options.injectSource) {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },

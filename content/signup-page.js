@@ -16,6 +16,8 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'FILL_CODE'
       || message.type === 'STEP8_FIND_AND_CLICK'
       || message.type === 'STEP8_GET_STATE'
+      || message.type === 'STEP8_SUBMIT_PHONE_NUMBER'
+      || message.type === 'STEP8_SUBMIT_SMS_CODE'
       || message.type === 'STEP8_TRIGGER_CONTINUE'
       || message.type === 'GET_LOGIN_AUTH_STATE'
       || message.type === 'PREPARE_SIGNUP_VERIFICATION'
@@ -84,6 +86,10 @@ async function handleCommand(message) {
       return await step8_findAndClick();
     case 'STEP8_GET_STATE':
       return getStep8State();
+    case 'STEP8_SUBMIT_PHONE_NUMBER':
+      return await step8_submitPhoneNumber(message.payload);
+    case 'STEP8_SUBMIT_SMS_CODE':
+      return await step8_submitSmsCode(message.payload);
     case 'STEP8_TRIGGER_CONTINUE':
       return await step8_triggerContinue(message.payload);
   }
@@ -294,10 +300,73 @@ async function handle405ResendError(step, remainingTimeout = 30000) {
 
 const SIGNUP_ENTRY_TRIGGER_PATTERN = /免费注册|立即注册|注册|sign\s*up|register|create\s*account|create\s+account/i;
 const SIGNUP_EMAIL_INPUT_SELECTOR = 'input[type="email"], input[name="email"], input[name="username"], input[id*="email"], input[placeholder*="email" i]';
+const SIGNUP_EMAIL_LOGIN_OPTION_PATTERN = /继续使用电子邮件地址登录|continue\s+with\s+email|continue\s+with\s+email\s+address|use\s+email/i;
+const DIRECT_SIGNUP_ENTRY_URL = 'https://auth.openai.com/create-account';
+const CHATGPT_ONBOARDING_CONFIRM_PATTERN = /好的，开始吧|开始吧|got\s+it|let'?s\s+go|continue/i;
+const CHATGPT_GUEST_HOME_PATTERN = /有什么可以帮忙的|what\s+can\s+i\s+help\s+with|与\s*chatgpt\s*聊天|temporary\s+chat|开启临时聊天|start\s+chatting/i;
+const CHATGPT_PRICING_FLOW_PATTERN = /免费试用|free\s+trial|领取免费试用|套餐就绪中|pricing|checkout|upgrade|升级至|plus\s+限时优惠|查看账单帮助/i;
 
 function getSignupEmailInput() {
   const input = document.querySelector(SIGNUP_EMAIL_INPUT_SELECTOR);
   return input && isVisibleElement(input) ? input : null;
+}
+
+function findSignupEmailLoginOptionTrigger() {
+  const candidates = document.querySelectorAll('button, a, [role="button"], [role="link"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || !isActionEnabled(el)) return false;
+    const text = getActionText(el);
+    if (!text || !SIGNUP_EMAIL_LOGIN_OPTION_PATTERN.test(text)) return false;
+    return !/工作电子邮件|work\s+email/i.test(text);
+  }) || null;
+}
+
+function findChatgptOnboardingConfirmTrigger() {
+  if (!/chatgpt\.com$/i.test(location.hostname || '')) {
+    return null;
+  }
+
+  const candidates = document.querySelectorAll('button, a, [role="button"], [role="link"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || !isActionEnabled(el)) return false;
+    return CHATGPT_ONBOARDING_CONFIRM_PATTERN.test(getActionText(el));
+  }) || null;
+}
+
+function isChatgptGuestHome() {
+  if (!/chatgpt\.com$/i.test(location.hostname || '')) {
+    return false;
+  }
+
+  if (/\/checkout\//i.test(location.pathname || '')) {
+    return false;
+  }
+
+  const pageText = getPageTextSnapshot();
+  return CHATGPT_GUEST_HOME_PATTERN.test(pageText)
+    && /免费试用|开启临时聊天|temporary\s+chat|创作一张图片|撰写或编辑|查找资料/i.test(pageText);
+}
+
+function isChatgptPricingOrCheckoutFlow() {
+  if (!/chatgpt\.com$/i.test(location.hostname || '')) {
+    return false;
+  }
+
+  if (/\/checkout\//i.test(location.pathname || '')) {
+    return true;
+  }
+
+  const pageText = getPageTextSnapshot();
+  return /#pricing/i.test(location.hash || '')
+    || CHATGPT_PRICING_FLOW_PATTERN.test(pageText);
+}
+
+function shouldRedirectToDirectSignupEntry() {
+  if (getSignupEmailInput() || findSignupEmailLoginOptionTrigger() || findSignupEntryTrigger()) {
+    return false;
+  }
+
+  return isChatgptGuestHome() || isChatgptPricingOrCheckoutFlow();
 }
 
 function getSignupEmailContinueButton({ allowDisabled = false } = {}) {
@@ -353,11 +422,37 @@ function inspectSignupEntryState() {
     };
   }
 
+  const onboardingConfirmTrigger = findChatgptOnboardingConfirmTrigger();
+  if (onboardingConfirmTrigger) {
+    return {
+      state: 'intro_dialog',
+      onboardingConfirmTrigger,
+      url: location.href,
+    };
+  }
+
+  const emailLoginOptionTrigger = findSignupEmailLoginOptionTrigger();
+  if (emailLoginOptionTrigger) {
+    return {
+      state: 'email_option',
+      emailLoginOptionTrigger,
+      url: location.href,
+    };
+  }
+
   const signupTrigger = findSignupEntryTrigger();
   if (signupTrigger) {
     return {
       state: 'entry_home',
       signupTrigger,
+      url: location.href,
+    };
+  }
+
+  if (shouldRedirectToDirectSignupEntry()) {
+    return {
+      state: 'direct_auth_redirect',
+      redirectUrl: DIRECT_SIGNUP_ENTRY_URL,
       url: location.href,
     };
   }
@@ -434,6 +529,15 @@ async function waitForSignupEntryState(options = {}) {
       return snapshot;
     }
 
+    if (snapshot.state === 'intro_dialog') {
+      if (autoOpenEntry && Date.now() - lastTriggerClickAt >= 1200) {
+        lastTriggerClickAt = Date.now();
+        log('步骤 2：检测到 ChatGPT 入门提示，正在关闭拦截弹层...');
+        await humanPause(250, 700);
+        simulateClick(snapshot.onboardingConfirmTrigger);
+      }
+    }
+
     if (snapshot.state === 'entry_home') {
       if (!autoOpenEntry) {
         return snapshot;
@@ -444,6 +548,32 @@ async function waitForSignupEntryState(options = {}) {
         log('步骤 2：正在点击官网注册入口...');
         await humanPause(350, 900);
         simulateClick(snapshot.signupTrigger);
+      }
+    }
+
+    if (snapshot.state === 'email_option') {
+      if (!autoOpenEntry) {
+        return snapshot;
+      }
+
+      if (Date.now() - lastTriggerClickAt >= 1200) {
+        lastTriggerClickAt = Date.now();
+        log('步骤 2：正在点击“继续使用电子邮件地址登录”...');
+        await humanPause(250, 700);
+        simulateClick(snapshot.emailLoginOptionTrigger);
+      }
+    }
+
+    if (snapshot.state === 'direct_auth_redirect') {
+      if (!autoOpenEntry) {
+        return snapshot;
+      }
+
+      if (Date.now() - lastTriggerClickAt >= 1500) {
+        lastTriggerClickAt = Date.now();
+        log('步骤 2：检测到 ChatGPT 已进入游客/套餐分支，正在切换到 OpenAI 直接注册页...');
+        location.href = snapshot.redirectUrl || DIRECT_SIGNUP_ENTRY_URL;
+        await sleep(1200);
       }
     }
 
@@ -632,7 +762,7 @@ const CONTINUE_ACTION_PATTERN = /继续|continue/i;
 const ADD_PHONE_PAGE_PATTERN = /add[\s-]*phone|添加手机号|手机号码|手机号|phone\s+number|telephone/i;
 const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|unable\s+to\s+create\s+(?:your\s+)?account|couldn'?t\s+create\s+(?:your\s+)?account|something\s+went\s+wrong|invalid\s+(?:birthday|birth|date)|生日|出生日期/i;
 const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops/i;
-const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时/i;
+const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时|invalid_state|验证过程中出错|verification\s+encountered\s+an\s+error/i;
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 
 const authPageRecovery = self.MultiPageAuthPageRecovery?.createAuthPageRecovery?.({
@@ -776,14 +906,208 @@ function isAddPhonePageReady() {
   const path = `${location.pathname || ''} ${location.href || ''}`;
   if (/\/add-phone(?:[/?#]|$)/i.test(path)) return true;
 
-  const phoneInput = document.querySelector(
-    'input[type="tel"]:not([maxlength="6"]), input[name*="phone" i], input[id*="phone" i], input[autocomplete="tel"]'
-  );
+  const phoneInput = getAddPhoneInput();
   if (phoneInput && isVisibleElement(phoneInput)) {
     return true;
   }
 
   return ADD_PHONE_PAGE_PATTERN.test(getPageTextSnapshot());
+}
+
+function isPhoneVerificationCodePage() {
+  const path = `${location.pathname || ''} ${location.href || ''}`;
+  if (/\/phone-verification(?:[/?#]|$)/i.test(path)) {
+    return true;
+  }
+
+  const codeTarget = getVerificationCodeTarget();
+  if (!codeTarget) {
+    return false;
+  }
+
+  return /查看你的手机|发送的验证码|重新发送短信|phone verification|verify your phone|resend sms/i.test(getPageTextSnapshot());
+}
+
+function getAddPhoneInputCandidates() {
+  const selectors = [
+    'input[type="tel"]:not([maxlength="6"])',
+    'input[autocomplete="tel"]',
+    'input[name*="phone" i]:not([type="hidden"])',
+    'input[id*="phone" i]:not([type="hidden"])',
+    'input[aria-label*="电话" i]',
+    'input[placeholder*="电话" i]',
+  ];
+  const seen = new Set();
+  const results = [];
+
+  selectors.forEach((selector) => {
+    document.querySelectorAll(selector).forEach((el) => {
+      if (seen.has(el)) return;
+      seen.add(el);
+      if (!isVisibleElement(el)) return;
+      results.push(el);
+    });
+  });
+
+  return results;
+}
+
+function getAddPhoneInput() {
+  return getAddPhoneInputCandidates()[0] || null;
+}
+
+function getAddPhoneHiddenPhoneInput() {
+  return document.querySelector('input[type="hidden"][name*="phone" i], input[type="hidden"][id*="phone" i]');
+}
+
+function getAddPhoneCountryButton() {
+  const candidates = document.querySelectorAll('button[aria-haspopup="listbox"], button[aria-expanded]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el)) return false;
+    const text = normalizeInlineText(getActionText(el));
+    return /\(\+\d{1,4}\)/.test(text) || /国家代码|country\s*code/i.test(text);
+  }) || null;
+}
+
+function getAddPhoneCountrySelect() {
+  return document.querySelector('[data-testid="hidden-select-container"] select');
+}
+
+function normalizePhoneDigits(phoneNumber) {
+  return String(phoneNumber || '').replace(/[^\d]/g, '');
+}
+
+function extractDialCodeFromCountryText(text) {
+  const match = normalizeInlineText(text).match(/\(\+(\d{1,4})\)/);
+  return match ? match[1] : '';
+}
+
+function setAddPhoneCountrySelectValue(select, optionValue) {
+  if (!select || !optionValue) return;
+  if (select.value === optionValue) return;
+
+  const option = Array.from(select.options || []).find((item) => item.value === optionValue);
+  if (!option) return;
+
+  select.value = optionValue;
+  option.selected = true;
+  select.dispatchEvent(new Event('input', { bubbles: true }));
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function getAddPhoneCountryDialCodeEntries() {
+  const select = getAddPhoneCountrySelect();
+  const button = getAddPhoneCountryButton();
+  if (!select || !button) {
+    return [];
+  }
+
+  const originalValue = select.value;
+  const entries = [];
+
+  Array.from(select.options || []).forEach((option) => {
+    if (!option?.value) return;
+    setAddPhoneCountrySelectValue(select, option.value);
+    const label = normalizeInlineText(button.textContent || '');
+    const dialCode = extractDialCodeFromCountryText(label);
+    if (!dialCode) return;
+    entries.push({
+      value: option.value,
+      label,
+      dialCode,
+    });
+  });
+
+  setAddPhoneCountrySelectValue(select, originalValue);
+  return entries;
+}
+
+function pickBestAddPhoneCountryEntry(phoneDigits, entries = []) {
+  const normalizedDigits = normalizePhoneDigits(phoneDigits);
+  if (!normalizedDigits) return null;
+
+  return entries
+    .filter((entry) => normalizedDigits.startsWith(String(entry?.dialCode || '')))
+    .sort((left, right) => String(right.dialCode || '').length - String(left.dialCode || '').length)[0] || null;
+}
+
+function getAddPhoneLocalNumber(phoneDigits, dialCode) {
+  const normalizedDigits = normalizePhoneDigits(phoneDigits);
+  const normalizedDialCode = normalizePhoneDigits(dialCode);
+  if (!normalizedDigits) return '';
+  if (!normalizedDialCode) return normalizedDigits;
+  if (normalizedDigits.startsWith(normalizedDialCode) && normalizedDigits.length > normalizedDialCode.length) {
+    return normalizedDigits.slice(normalizedDialCode.length);
+  }
+  return normalizedDigits;
+}
+
+function ensureAddPhoneCountryForPhoneNumber(phoneDigits) {
+  const normalizedDigits = normalizePhoneDigits(phoneDigits);
+  const button = getAddPhoneCountryButton();
+  const select = getAddPhoneCountrySelect();
+  const currentDialCode = extractDialCodeFromCountryText(getActionText(button));
+  if (currentDialCode && normalizedDigits.startsWith(currentDialCode)) {
+    return {
+      dialCode: currentDialCode,
+      countryChanged: false,
+      countryLabel: normalizeInlineText(getActionText(button)),
+    };
+  }
+
+  if (!select || !button) {
+    return {
+      dialCode: currentDialCode,
+      countryChanged: false,
+      countryLabel: normalizeInlineText(getActionText(button)),
+    };
+  }
+
+  const targetEntry = pickBestAddPhoneCountryEntry(normalizedDigits, getAddPhoneCountryDialCodeEntries());
+  if (!targetEntry) {
+    return {
+      dialCode: currentDialCode,
+      countryChanged: false,
+      countryLabel: normalizeInlineText(getActionText(button)),
+    };
+  }
+
+  setAddPhoneCountrySelectValue(select, targetEntry.value);
+  return {
+    dialCode: targetEntry.dialCode,
+    countryChanged: select.value === targetEntry.value,
+    countryLabel: targetEntry.label,
+  };
+}
+
+async function waitForAddPhoneInputReady(timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const input = getAddPhoneInput();
+    if (input) {
+      return input;
+    }
+    await sleep(150);
+  }
+
+  throw new Error('未找到手机号输入框。URL: ' + location.href);
+}
+
+function getAddPhoneSubmitButton({ allowDisabled = false } = {}) {
+  const direct = document.querySelector('button[type="submit"], input[type="submit"]');
+  if (direct && isVisibleElement(direct) && (allowDisabled || isActionEnabled(direct))) {
+    return direct;
+  }
+
+  const candidates = document.querySelectorAll(
+    'button, [role="button"], input[type="button"], input[type="submit"]'
+  );
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || (!allowDisabled && !isActionEnabled(el))) return false;
+    const text = getActionText(el);
+    return /continue|next|submit|send|verify|code|phone|继续|下一步|提交|发送|验证/i.test(text);
+  }) || null;
 }
 
 function isStep8Ready() {
@@ -793,6 +1117,50 @@ function isStep8Ready() {
   if (isAddPhonePageReady()) return false;
 
   return isOAuthConsentPage();
+}
+
+async function waitForAddPhoneCodeEntryReady(timeout = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const codeTarget = getVerificationCodeTarget();
+    if (codeTarget) {
+      return codeTarget;
+    }
+    if (isStep8Ready()) {
+      return null;
+    }
+    await sleep(150);
+  }
+
+  throw new Error('手机号页面长时间未出现短信验证码输入框。URL: ' + location.href);
+}
+
+async function waitForSmsVerificationSubmitOutcome(timeout = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+
+    const errorText = getVerificationErrorText();
+    if (errorText) {
+      return { invalidCode: true, errorText };
+    }
+
+    if (isStep8Ready()) {
+      return { success: true };
+    }
+
+    await sleep(150);
+  }
+
+  if (isStep8Ready()) {
+    return { success: true };
+  }
+
+  return {
+    invalidCode: true,
+    errorText: getVerificationErrorText() || '提交后仍停留在手机号验证码页面。',
+  };
 }
 
 function normalizeInlineText(text) {
@@ -1018,6 +1386,8 @@ function getAuthTimeoutErrorPageState(options = {}) {
 
 function getAuthRetryPathPatternsForFlow(flow = 'auth') {
   switch (flow) {
+    case 'signup_entry':
+      return [/\/create-account(?:[/?#]|$)/i];
     case 'signup_password':
       return [/\/create-account\/password(?:[/?#]|$)/i];
     case 'login':
@@ -1158,6 +1528,16 @@ function getLoginSubmitButton({ allowDisabled = false } = {}) {
   }) || null;
 }
 
+function isChatgptOnboardingPage() {
+  if (!/^https:\/\/chatgpt\.com(?:[/?#]|$)/i.test(String(location.href || ''))) {
+    return false;
+  }
+
+  const pageText = getPageTextSnapshot();
+  return /是什么促使你使用\s*chatgpt|what\s+brings\s+you\s+to\s+chatgpt/i.test(pageText)
+    && /下一步|跳过|next|skip/i.test(pageText);
+}
+
 function inspectLoginAuthState() {
   const retryState = getLoginTimeoutErrorPageState();
   const verificationTarget = getVerificationCodeTarget();
@@ -1208,6 +1588,13 @@ function inspectLoginAuthState() {
     return {
       ...baseState,
       state: 'add_phone_page',
+    };
+  }
+
+  if (isChatgptOnboardingPage()) {
+    return {
+      ...baseState,
+      state: 'chatgpt_onboarding_page',
     };
   }
 
@@ -1266,6 +1653,8 @@ function getLoginAuthStateLabel(snapshot) {
       return '密码页';
     case 'email_page':
       return '邮箱输入页';
+    case 'chatgpt_onboarding_page':
+      return 'ChatGPT 已登录引导页';
     case 'login_timeout_error_page':
       return '登录超时报错页';
     case 'oauth_consent_page':
@@ -1359,6 +1748,16 @@ async function createStep6LoginTimeoutRecoverableResult(reason, snapshot, messag
   return createStep6RecoverableResult(reason, resolvedSnapshot, {
     message,
   });
+}
+
+function createChatgptOnboardingRecoverableResult(snapshot, message = '') {
+  return createStep6RecoverableResult(
+    'chatgpt_onboarding_page',
+    normalizeStep6Snapshot(snapshot || inspectLoginAuthState()),
+    {
+      message: message || '检测到 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态，请重新清理登录 Cookies 后再执行步骤 7。',
+    }
+  );
 }
 
 function normalizeStep6Snapshot(snapshot) {
@@ -1670,11 +2069,91 @@ async function fillVerificationCode(step, payload) {
   return outcome;
 }
 
+async function step8_submitPhoneNumber(payload = {}) {
+  const phoneNumber = String(payload.phoneNumber || '').trim();
+  if (!phoneNumber) {
+    throw new Error('未提供手机号。');
+  }
+  if (!isAddPhonePageReady()) {
+    throw new Error('当前页面未进入手机号验证页。URL: ' + location.href);
+  }
+
+  const phoneInput = await waitForAddPhoneInputReady();
+  const phoneDigits = normalizePhoneDigits(phoneNumber);
+  const countryState = ensureAddPhoneCountryForPhoneNumber(phoneDigits);
+  const localPhoneNumber = getAddPhoneLocalNumber(phoneDigits, countryState.dialCode);
+  if (countryState.countryChanged && countryState.countryLabel) {
+    log(`步骤 8：已切换手机号国家为 ${countryState.countryLabel}。`, 'info');
+  }
+
+  log(`步骤 8：正在填写手机号：${phoneNumber}`);
+  fillInput(phoneInput, localPhoneNumber || phoneDigits || phoneNumber);
+  await sleep(400);
+
+  const hiddenPhoneInput = getAddPhoneHiddenPhoneInput();
+  const hiddenPhoneDigits = normalizePhoneDigits(hiddenPhoneInput?.value || '');
+  if (hiddenPhoneDigits && phoneDigits && hiddenPhoneDigits !== phoneDigits) {
+    log(`步骤 8：当前页面解析出的手机号为 +${hiddenPhoneDigits}，与 Hero-SMS 返回的 +${phoneDigits} 不一致。`, 'warn');
+  }
+
+  const submitBtn = getAddPhoneSubmitButton();
+  if (submitBtn) {
+    await humanPause(350, 900);
+    simulateClick(submitBtn);
+    log('步骤 8：手机号已提交');
+  }
+
+  await waitForAddPhoneCodeEntryReady();
+  log('步骤 8：短信验证码输入框已就绪。', 'ok');
+  return getStep8State();
+}
+
+async function step8_submitSmsCode(payload = {}) {
+  const code = String(payload.code || '').trim();
+  if (!code) {
+    throw new Error('未提供短信验证码。');
+  }
+  if (!isPhoneVerificationCodePage()) {
+    throw new Error('当前页面未进入手机号验证码页。URL: ' + location.href);
+  }
+
+  log(`步骤 8：正在填写短信验证码：${code}`);
+  const codeTarget = await waitForAddPhoneCodeEntryReady();
+  if (!codeTarget) {
+    return getStep8State();
+  }
+
+  if (codeTarget.type === 'split') {
+    for (let index = 0; index < 6 && index < codeTarget.elements.length; index += 1) {
+      fillInput(codeTarget.elements[index], code[index] || '');
+      await sleep(100);
+    }
+  } else {
+    fillInput(codeTarget.element, code);
+  }
+
+  await sleep(400);
+  const submitBtn = getAddPhoneSubmitButton();
+  if (submitBtn) {
+    await humanPause(350, 900);
+    simulateClick(submitBtn);
+    log('步骤 8：短信验证码已提交');
+  }
+
+  const outcome = await waitForSmsVerificationSubmitOutcome();
+  if (outcome.invalidCode) {
+    throw new Error(`短信验证码被拒绝：${outcome.errorText}`);
+  }
+
+  log(`步骤 8：短信验证码已通过${outcome.assumed ? '（按成功推定）' : ''}。`, 'ok');
+  return getStep8State();
+}
+
 // ============================================================
 // Step 7: Login with registered account (on OAuth auth page)
 // ============================================================
 
-async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 12000) {
+async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 12000, payload = {}) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1712,7 +2191,26 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
     }
 
     if (snapshot.state === 'add_phone_page') {
+      if (payload?.allowAddPhoneVerification) {
+        return {
+          action: 'done',
+          result: createStep6SuccessResult(snapshot, {
+            via: 'add_phone_page',
+            loginVerificationRequestedAt: emailSubmittedAt,
+          }),
+        };
+      }
       throw new Error(`提交邮箱后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
+    }
+
+    if (snapshot.state === 'chatgpt_onboarding_page') {
+      return {
+        action: 'recoverable',
+        result: createChatgptOnboardingRecoverableResult(
+          snapshot,
+          '提交邮箱后落入 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态。'
+        ),
+      };
     }
 
     await sleep(250);
@@ -1745,7 +2243,25 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
     throw new Error(`提交邮箱后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
   }
   if (snapshot.state === 'add_phone_page') {
+    if (payload?.allowAddPhoneVerification) {
+      return {
+        action: 'done',
+        result: createStep6SuccessResult(snapshot, {
+          via: 'add_phone_page',
+          loginVerificationRequestedAt: emailSubmittedAt,
+        }),
+      };
+    }
     throw new Error(`提交邮箱后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
+  }
+  if (snapshot.state === 'chatgpt_onboarding_page') {
+    return {
+      action: 'recoverable',
+      result: createChatgptOnboardingRecoverableResult(
+        snapshot,
+        '提交邮箱后落入 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态。'
+      ),
+    };
   }
 
   return {
@@ -1756,7 +2272,7 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
   };
 }
 
-async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout = 10000) {
+async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout = 10000, payload = {}) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1790,7 +2306,26 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
     }
 
     if (snapshot.state === 'add_phone_page') {
+      if (payload?.allowAddPhoneVerification) {
+        return {
+          action: 'done',
+          result: createStep6SuccessResult(snapshot, {
+            via: 'add_phone_page',
+            loginVerificationRequestedAt: passwordSubmittedAt,
+          }),
+        };
+      }
       throw new Error(`提交密码后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
+    }
+
+    if (snapshot.state === 'chatgpt_onboarding_page') {
+      return {
+        action: 'recoverable',
+        result: createChatgptOnboardingRecoverableResult(
+          snapshot,
+          '提交密码后落入 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态。'
+        ),
+      };
     }
 
     await sleep(250);
@@ -1820,7 +2355,25 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
     throw new Error(`提交密码后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
   }
   if (snapshot.state === 'add_phone_page') {
+    if (payload?.allowAddPhoneVerification) {
+      return {
+        action: 'done',
+        result: createStep6SuccessResult(snapshot, {
+          via: 'add_phone_page',
+          loginVerificationRequestedAt: passwordSubmittedAt,
+        }),
+      };
+    }
     throw new Error(`提交密码后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
+  }
+  if (snapshot.state === 'chatgpt_onboarding_page') {
+    return {
+      action: 'recoverable',
+      result: createChatgptOnboardingRecoverableResult(
+        snapshot,
+        '提交密码后落入 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态。'
+      ),
+    };
   }
   if (snapshot.state === 'password_page' && snapshot.switchTrigger) {
     return { action: 'switch', snapshot };
@@ -1834,7 +2387,7 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
   };
 }
 
-async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeout = 10000) {
+async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeout = 10000, payload = {}) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1862,7 +2415,20 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
     }
 
     if (snapshot.state === 'add_phone_page') {
+      if (payload?.allowAddPhoneVerification) {
+        return createStep6SuccessResult(snapshot, {
+          via: 'add_phone_page',
+          loginVerificationRequestedAt,
+        });
+      }
       throw new Error(`切换到一次性验证码登录后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
+    }
+
+    if (snapshot.state === 'chatgpt_onboarding_page') {
+      return createChatgptOnboardingRecoverableResult(
+        snapshot,
+        '切换到一次性验证码登录后落入 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态。'
+      );
     }
 
     await sleep(250);
@@ -1886,7 +2452,19 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
     throw new Error(`切换到一次性验证码登录后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
   }
   if (snapshot.state === 'add_phone_page') {
+    if (payload?.allowAddPhoneVerification) {
+      return createStep6SuccessResult(snapshot, {
+        via: 'add_phone_page',
+        loginVerificationRequestedAt,
+      });
+    }
     throw new Error(`切换到一次性验证码登录后页面直接进入手机号页面，未经过登录验证码页。URL: ${snapshot.url}`);
+  }
+  if (snapshot.state === 'chatgpt_onboarding_page') {
+    return createChatgptOnboardingRecoverableResult(
+      snapshot,
+      '切换到一次性验证码登录后落入 ChatGPT 已登录引导页，说明当前浏览器仍保留登录态。'
+    );
   }
 
   return createStep6RecoverableResult('one_time_code_switch_stalled', snapshot, {
@@ -1894,7 +2472,7 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
   });
 }
 
-async function step6SwitchToOneTimeCodeLogin(snapshot) {
+async function step6SwitchToOneTimeCodeLogin(snapshot, payload = {}) {
   const switchTrigger = snapshot?.switchTrigger || findOneTimeCodeLoginTrigger();
   if (!switchTrigger || !isActionEnabled(switchTrigger)) {
     return createStep6RecoverableResult('missing_one_time_code_trigger', normalizeStep6Snapshot(inspectLoginAuthState()), {
@@ -1908,7 +2486,7 @@ async function step6SwitchToOneTimeCodeLogin(snapshot) {
   simulateClick(switchTrigger);
   log('步骤 7：已点击一次性验证码登录');
   await sleep(1200);
-  return waitForStep6SwitchTransition(loginVerificationRequestedAt);
+  return waitForStep6SwitchTransition(loginVerificationRequestedAt, 10000, payload);
 }
 
 async function step6LoginFromPasswordPage(payload, snapshot) {
@@ -1929,9 +2507,14 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
     await triggerLoginSubmitAction(currentSnapshot.submitButton, currentSnapshot.passwordInput);
     log('步骤 7：已提交密码');
 
-    const transition = await waitForStep6PasswordSubmitTransition(passwordSubmittedAt);
+    const transition = await waitForStep6PasswordSubmitTransition(passwordSubmittedAt, 10000, payload);
     if (transition.action === 'done') {
-      log('步骤 7：已进入登录验证码页面。', 'ok');
+      log(
+        transition.result?.via === 'add_phone_page'
+          ? '步骤 7：已进入手机号验证页面，后续将转入 Hero-SMS 短信验证。'
+          : '步骤 7：已进入登录验证码页面。',
+        'ok'
+      );
       return transition.result;
     }
     if (transition.action === 'recoverable') {
@@ -1939,7 +2522,7 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
       return transition.result;
     }
     if (transition.action === 'switch') {
-      return step6SwitchToOneTimeCodeLogin(transition.snapshot);
+      return step6SwitchToOneTimeCodeLogin(transition.snapshot, payload);
     }
 
     return createStep6RecoverableResult('password_submit_unknown', normalizeStep6Snapshot(inspectLoginAuthState()), {
@@ -1948,7 +2531,7 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
   }
 
   if (currentSnapshot.switchTrigger) {
-    return step6SwitchToOneTimeCodeLogin(currentSnapshot);
+    return step6SwitchToOneTimeCodeLogin(currentSnapshot, payload);
   }
 
   return createStep6RecoverableResult('password_page_unactionable', currentSnapshot, {
@@ -1976,9 +2559,14 @@ async function step6LoginFromEmailPage(payload, snapshot) {
   await triggerLoginSubmitAction(currentSnapshot.submitButton, emailInput);
   log('步骤 7：已提交邮箱');
 
-  const transition = await waitForStep6EmailSubmitTransition(emailSubmittedAt);
+  const transition = await waitForStep6EmailSubmitTransition(emailSubmittedAt, 12000, payload);
   if (transition.action === 'done') {
-    log('步骤 7：已进入登录验证码页面。', 'ok');
+    log(
+      transition.result?.via === 'add_phone_page'
+        ? '步骤 7：已进入手机号验证页面，后续将转入 Hero-SMS 短信验证。'
+        : '步骤 7：已进入登录验证码页面。',
+      'ok'
+    );
     return transition.result;
   }
   if (transition.action === 'recoverable') {
@@ -2007,12 +2595,25 @@ async function step6_login(payload) {
     return createStep6SuccessResult(snapshot, { via: 'already_on_verification_page' });
   }
 
+  if (snapshot.state === 'add_phone_page' && payload?.allowAddPhoneVerification) {
+    log('步骤 7：检测到已进入手机号页面，后续将转入 Hero-SMS 短信验证。', 'ok');
+    return createStep6SuccessResult(snapshot, { via: 'add_phone_page' });
+  }
+
   if (snapshot.state === 'login_timeout_error_page') {
     log('步骤 7：检测到登录超时报错，准备重新执行步骤 7。', 'warn');
     return await createStep6LoginTimeoutRecoverableResult(
       'login_timeout_error_page',
       snapshot,
       '当前页面处于登录超时报错页。'
+    );
+  }
+
+  if (snapshot.state === 'chatgpt_onboarding_page') {
+    log('步骤 7：检测到 ChatGPT 已登录引导页，准备重新清理登录态并重试。', 'warn');
+    return createChatgptOnboardingRecoverableResult(
+      snapshot,
+      '检测到 ChatGPT 已登录引导页，准备重新清理登录态并重试。'
     );
   }
 
@@ -2058,6 +2659,7 @@ function getStep8State() {
     consentReady: isStep8Ready(),
     verificationPage: isVerificationPageStillVisible(),
     addPhonePage: isAddPhonePageReady(),
+    phoneVerificationPage: isPhoneVerificationCodePage(),
     retryPage: Boolean(retryState),
     retryEnabled: Boolean(retryState?.retryEnabled),
     retryTitleMatched: Boolean(retryState?.titleMatched),

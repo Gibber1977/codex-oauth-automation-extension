@@ -108,6 +108,27 @@
 4. 选择本项目目录
 5. 打开扩展侧边栏
 
+### Edge 测试浏览器
+
+如果你想用单独的 Edge 测试浏览器来加载本扩展，建议不要把浏览器 profile 放在扩展根目录内。
+
+原因：
+
+- Edge 重新加载 unpacked extension 时会扫描整个扩展目录
+- 像 `_edge_test_profile` 这种以下划线开头的目录会直接导致扩展加载失败
+
+Windows 可直接运行仓库根目录的：
+
+```powershell
+.\start-edge-test-browser.bat
+```
+
+该脚本会：
+
+- 使用当前仓库目录作为 `--load-extension`
+- 把测试浏览器 profile 放到仓库外的同级目录 `codex-oauth-automation-extension-hero-profile\edge-user-data`
+- 打开 `edge://extensions/`，便于你直接确认扩展加载状态
+
 ## 快速开始
 
 如果你只是想先跑通一套最稳的组合，建议直接按下面三种方案之一配置。

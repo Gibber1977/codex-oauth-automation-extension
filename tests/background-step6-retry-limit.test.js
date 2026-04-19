@@ -33,6 +33,7 @@ test('step 7 retries up to configured limit and then fails', async () => {
   const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
 
   const events = {
+    cleanupCalls: 0,
     refreshCalls: 0,
     sendCalls: 0,
     completed: 0,
@@ -43,6 +44,7 @@ test('step 7 retries up to configured limit and then fails', async () => {
     completeStepFromBackground: async () => {
       events.completed += 1;
     },
+    ensureContentScriptReadyOnTab: async () => {},
     getErrorMessage: (error) => error?.message || String(error || ''),
     getLoginAuthStateLabel: (state) => state || 'unknown',
     getState: async () => ({ email: 'user@example.com', password: 'secret' }),
@@ -51,6 +53,9 @@ test('step 7 retries up to configured limit and then fails', async () => {
     refreshOAuthUrlBeforeStep6: async () => {
       events.refreshCalls += 1;
       return `https://oauth.example/${events.refreshCalls}`;
+    },
+    runPreStep6CookieCleanup: async () => {
+      events.cleanupCalls += 1;
     },
     reuseOrCreateTab: async () => {},
     sendToContentScriptResilient: async () => {
@@ -61,6 +66,7 @@ test('step 7 retries up to configured limit and then fails', async () => {
         message: '当前仍停留在邮箱页。',
       };
     },
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'],
     STEP6_MAX_ATTEMPTS: 3,
     throwIfStopped: () => {},
   });
@@ -70,6 +76,7 @@ test('step 7 retries up to configured limit and then fails', async () => {
     /已重试 2 次，仍未成功/
   );
 
+  assert.equal(events.cleanupCalls, 3);
   assert.equal(events.refreshCalls, 3);
   assert.equal(events.sendCalls, 3);
   assert.equal(events.completed, 0);
@@ -81,6 +88,7 @@ test('step 7 exits internal retry loop immediately when add-phone is detected', 
   const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
 
   const events = {
+    cleanupCalls: 0,
     refreshCalls: 0,
     sendCalls: 0,
     completed: 0,
@@ -94,6 +102,7 @@ test('step 7 exits internal retry loop immediately when add-phone is detected', 
     completeStepFromBackground: async () => {
       events.completed += 1;
     },
+    ensureContentScriptReadyOnTab: async () => {},
     getErrorMessage: (error) => error?.message || String(error || ''),
     getLoginAuthStateLabel: (state) => state || 'unknown',
     getState: async () => ({ email: 'user@example.com', password: 'secret' }),
@@ -103,11 +112,15 @@ test('step 7 exits internal retry loop immediately when add-phone is detected', 
       events.refreshCalls += 1;
       return `https://oauth.example/${events.refreshCalls}`;
     },
+    runPreStep6CookieCleanup: async () => {
+      events.cleanupCalls += 1;
+    },
     reuseOrCreateTab: async () => {},
     sendToContentScriptResilient: async () => {
       events.sendCalls += 1;
       throw new Error('提交密码后页面直接进入手机号页面，未经过登录验证码页。URL: https://auth.openai.com/add-phone');
     },
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'],
     STEP6_MAX_ATTEMPTS: 3,
     throwIfStopped: () => {},
   });
@@ -117,6 +130,7 @@ test('step 7 exits internal retry loop immediately when add-phone is detected', 
     /add-phone/
   );
 
+  assert.equal(events.cleanupCalls, 1, 'add-phone should stop after the first cookie cleanup');
   assert.equal(events.refreshCalls, 1, 'add-phone should stop further OAuth refresh attempts');
   assert.equal(events.sendCalls, 1, 'add-phone should stop after the first failed login attempt');
   assert.equal(events.completed, 0);
@@ -126,12 +140,68 @@ test('step 7 exits internal retry loop immediately when add-phone is detected', 
   );
 });
 
+test('step 7 treats add-phone as success when Hero-SMS flow is enabled', async () => {
+  const source = fs.readFileSync('background/steps/oauth-login.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
+
+  const events = {
+    cleanupCalls: 0,
+    completed: [],
+    payloads: [],
+  };
+
+  const executor = api.createStep7Executor({
+    addLog: async () => {},
+    completeStepFromBackground: async (step, payload) => {
+      events.completed.push(step);
+      events.payloads.push(payload);
+    },
+    ensureContentScriptReadyOnTab: async () => {},
+    getErrorMessage: (error) => error?.message || String(error || ''),
+    getLoginAuthStateLabel: (state) => state || 'unknown',
+    getState: async () => ({
+      email: 'user@example.com',
+      password: 'secret',
+      heroSmsEnabled: true,
+    }),
+    isStep6RecoverableResult: (result) => result?.step6Outcome === 'recoverable',
+    isStep6SuccessResult: (result) => result?.step6Outcome === 'success',
+    refreshOAuthUrlBeforeStep6: async () => 'https://oauth.example/latest',
+    runPreStep6CookieCleanup: async () => {
+      events.cleanupCalls += 1;
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async (_source, message) => {
+      assert.equal(message.payload.allowAddPhoneVerification, true);
+      return {
+        step6Outcome: 'success',
+        state: 'add_phone_page',
+        via: 'add_phone_page',
+        loginVerificationRequestedAt: 123456,
+      };
+    },
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'],
+    STEP6_MAX_ATTEMPTS: 3,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep7({ email: 'user@example.com', password: 'secret', heroSmsEnabled: true });
+
+  assert.equal(events.cleanupCalls, 1);
+  assert.deepStrictEqual(events.completed, [7]);
+  assert.deepStrictEqual(events.payloads, [
+    { loginVerificationRequestedAt: 123456 },
+  ]);
+});
+
 test('step 7 starts a new oauth timeout window for each refreshed oauth url', async () => {
   const source = fs.readFileSync('background/steps/oauth-login.js', 'utf8');
   const globalScope = {};
   const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
 
   const events = {
+    cleanupCalls: 0,
     startedWindows: [],
     timeoutRequests: [],
   };
@@ -139,6 +209,7 @@ test('step 7 starts a new oauth timeout window for each refreshed oauth url', as
   const executor = api.createStep7Executor({
     addLog: async () => {},
     completeStepFromBackground: async () => {},
+    ensureContentScriptReadyOnTab: async () => {},
     getErrorMessage: (error) => error?.message || String(error || ''),
     getLoginAuthStateLabel: (state) => state || 'unknown',
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs, options) => {
@@ -149,11 +220,15 @@ test('step 7 starts a new oauth timeout window for each refreshed oauth url', as
     isStep6RecoverableResult: (result) => result?.step6Outcome === 'recoverable',
     isStep6SuccessResult: (result) => result?.step6Outcome === 'success',
     refreshOAuthUrlBeforeStep6: async () => 'https://oauth.example/latest',
+    runPreStep6CookieCleanup: async () => {
+      events.cleanupCalls += 1;
+    },
     reuseOrCreateTab: async () => {},
     sendToContentScriptResilient: async (_source, _message, options) => ({
       step6Outcome: 'success',
       usedTimeoutMs: options.timeoutMs,
     }),
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'],
     startOAuthFlowTimeoutWindow: async (payload) => {
       events.startedWindows.push(payload);
     },
@@ -163,6 +238,7 @@ test('step 7 starts a new oauth timeout window for each refreshed oauth url', as
 
   await executor.executeStep7({ email: 'user@example.com', password: 'secret' });
 
+  assert.equal(events.cleanupCalls, 1);
   assert.deepStrictEqual(events.startedWindows, [
     { step: 7, oauthUrl: 'https://oauth.example/latest' },
   ]);

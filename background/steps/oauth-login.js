@@ -5,6 +5,7 @@
     const {
       addLog,
       completeStepFromBackground,
+      ensureContentScriptReadyOnTab,
       getErrorMessage,
       getLoginAuthStateLabel,
       getOAuthFlowStepTimeoutMs,
@@ -16,8 +17,10 @@
       isStep6RecoverableResult,
       isStep6SuccessResult,
       refreshOAuthUrlBeforeStep6,
+      runPreStep6CookieCleanup,
       reuseOrCreateTab,
       sendToContentScriptResilient,
+      SIGNUP_PAGE_INJECT_FILES,
       startOAuthFlowTimeoutWindow,
       STEP6_MAX_ATTEMPTS,
       throwIfStopped,
@@ -55,7 +58,24 @@
             await addLog(`步骤 7：上一轮失败后，正在进行第 ${attempt} 次尝试（最多 ${STEP6_MAX_ATTEMPTS} 次）...`, 'warn');
           }
 
-          await reuseOrCreateTab('signup-page', oauthUrl);
+          if (typeof runPreStep6CookieCleanup === 'function') {
+            await runPreStep6CookieCleanup({
+              logStep: 7,
+              waitMs: 0,
+            });
+          }
+
+          const tabId = await reuseOrCreateTab('signup-page', oauthUrl);
+
+          if (typeof ensureContentScriptReadyOnTab === 'function' && Array.isArray(SIGNUP_PAGE_INJECT_FILES)) {
+            await ensureContentScriptReadyOnTab('signup-page', tabId, {
+              inject: SIGNUP_PAGE_INJECT_FILES,
+              injectSource: 'signup-page',
+              timeoutMs: Math.min(loginTimeoutMs, 45000),
+              retryDelayMs: 900,
+              logMessage: '步骤 7：认证页正在切换，等待页面重新就绪后继续登录...',
+            });
+          }
 
           const result = await sendToContentScriptResilient(
             'signup-page',
@@ -64,6 +84,7 @@
               step: 7,
               source: 'background',
               payload: {
+                allowAddPhoneVerification: Boolean(currentState.heroSmsEnabled),
                 email: currentState.email,
                 password,
               },

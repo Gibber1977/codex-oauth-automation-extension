@@ -6,11 +6,15 @@
       addLog,
       completeStepFromBackground,
       openSignupEntryTab,
+      prepareFingerprintProfileForStep1,
     } = deps;
 
     async function executeStep1() {
       await addLog('步骤 1：正在打开 ChatGPT 官网...');
-      await openSignupEntryTab(1);
+      if (typeof prepareFingerprintProfileForStep1 === 'function') {
+        await prepareFingerprintProfileForStep1();
+      }
+      await openSignupEntryTab(1, { reloadIfSameUrl: true });
       await completeStepFromBackground(1, {});
     }
 

@@ -17,29 +17,33 @@ if (!isTopFrame) {
   console.log(MAIL163_PREFIX, 'Skipping child frame');
 } else {
 
-// Track codes we've already seen — persisted in chrome.storage.session to survive script re-injection
-let seenCodes = new Set();
+const MAIL163_PROCESSED_RECORDS_STORAGE_KEY = 'mail163ProcessedVerificationEntries';
 
-async function loadSeenCodes() {
+// Track exact mail-instance/code pairs we've already handled so the same row is not reused,
+// while still allowing the same numeric code to be accepted from a newer mail.
+let processedMailCodeEntries = new Set();
+
+async function loadProcessedMailCodeEntries() {
   try {
-    const data = await chrome.storage.session.get('seenCodes');
-    if (data.seenCodes && Array.isArray(data.seenCodes)) {
-      seenCodes = new Set(data.seenCodes);
-      console.log(MAIL163_PREFIX, `Loaded ${seenCodes.size} previously seen codes`);
+    const data = await chrome.storage.session.get(MAIL163_PROCESSED_RECORDS_STORAGE_KEY);
+    const storedEntries = data?.[MAIL163_PROCESSED_RECORDS_STORAGE_KEY];
+    if (storedEntries && Array.isArray(storedEntries)) {
+      processedMailCodeEntries = new Set(storedEntries.filter(Boolean));
+      console.log(MAIL163_PREFIX, `Loaded ${processedMailCodeEntries.size} processed mail/code entries`);
     }
   } catch (err) {
-    console.warn(MAIL163_PREFIX, 'Session storage unavailable, using in-memory seen codes:', err?.message || err);
+    console.warn(MAIL163_PREFIX, 'Session storage unavailable, using in-memory processed mail/code entries:', err?.message || err);
   }
 }
 
-// Load previously seen codes on startup
-loadSeenCodes();
+// Load previously processed mail/code pairs on startup
+loadProcessedMailCodeEntries();
 
-async function persistSeenCodes() {
+async function persistProcessedMailCodeEntries() {
   try {
-    await chrome.storage.session.set({ seenCodes: [...seenCodes] });
+    await chrome.storage.session.set({ [MAIL163_PROCESSED_RECORDS_STORAGE_KEY]: [...processedMailCodeEntries] });
   } catch (err) {
-    console.warn(MAIL163_PREFIX, 'Could not persist seen codes, continuing in-memory only:', err?.message || err);
+    console.warn(MAIL163_PREFIX, 'Could not persist processed mail/code entries, continuing in-memory only:', err?.message || err);
   }
 }
 
@@ -71,6 +75,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function findMailItems() {
   return document.querySelectorAll('div[sign="letter"]');
+}
+
+function normalizeText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isVisibleElement(element) {
+  if (!element || typeof element.getClientRects !== 'function') {
+    return false;
+  }
+  return Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+}
+
+function getMailItemMetadata(item) {
+  const sender = normalizeText(item.querySelector('.nui-user')?.textContent || '');
+  const subject = normalizeText(item.querySelector('span.da0')?.textContent || '');
+  const ariaLabel = normalizeText(item.getAttribute('aria-label') || '');
+  const timeText = normalizeText(
+    item.querySelector('.e00[title], [title*="年"][title*=":"]')?.getAttribute?.('title')
+    || item.querySelector('.e00[title], [title*="年"][title*=":"]')?.textContent
+    || ''
+  );
+
+  return {
+    sender,
+    subject,
+    ariaLabel,
+    timeText,
+    combinedText: normalizeText([sender, subject, ariaLabel, timeText].filter(Boolean).join(' ')),
+  };
 }
 
 function getCurrentMailIds() {
@@ -146,11 +180,189 @@ function getMailTimestamp(item) {
 }
 
 function scheduleEmailCleanup(item, step) {
+  const itemId = item?.getAttribute?.('id') || item?.id || '';
   setTimeout(() => {
-    Promise.resolve(deleteEmail(item, step)).catch(() => {
+    const targetItem = itemId ? document.getElementById(itemId) : item;
+    if (!targetItem) {
+      return;
+    }
+    Promise.resolve(deleteEmail(targetItem, step)).catch(() => {
       // Cleanup is best effort only and must never affect the main verification flow.
     });
   }, 0);
+}
+
+function findReadBackButton() {
+  return Array.from(document.querySelectorAll('button, a')).find((element) => {
+    if (!isVisibleElement(element)) {
+      return false;
+    }
+    const text = normalizeText(
+      element.innerText
+      || element.textContent
+      || element.getAttribute?.('aria-label')
+      || element.getAttribute?.('title')
+      || ''
+    );
+    return /返回/.test(text);
+  }) || null;
+}
+
+function isReadMode() {
+  return /#module=read\.ReadModule/i.test(location.href)
+    || /#module=read\.ReadModule/i.test(location.hash)
+    || Boolean(findReadBackButton());
+}
+
+function getOpenedMailBodyFrame() {
+  const selectors = [
+    'iframe[id$="_frameBody"]',
+    'iframe[name$="_frameBody"]',
+    'iframe.oD0',
+  ];
+
+  for (const selector of selectors) {
+    const frames = Array.from(document.querySelectorAll(selector));
+    const visible = frames.find(isVisibleElement);
+    if (visible) return visible;
+    if (frames[0]) return frames[0];
+  }
+
+  return null;
+}
+
+function buildProcessedMailCodeEntryKey({ mailId = '', mailTimestamp = 0, code = '', meta = null }) {
+  const normalizedCode = normalizeText(code);
+  if (!normalizedCode) {
+    return '';
+  }
+
+  const normalizedMailId = normalizeText(mailId);
+  const normalizedTimestamp = Number.isFinite(Number(mailTimestamp)) && Number(mailTimestamp) > 0
+    ? String(Number(mailTimestamp))
+    : '';
+  const normalizedSender = normalizeText(meta?.sender || '');
+  const normalizedSubject = normalizeText(meta?.subject || '');
+  const normalizedTimeText = normalizeText(meta?.timeText || '');
+
+  const mailIdentity = [
+    normalizedMailId,
+    normalizedTimestamp,
+    normalizedSender,
+    normalizedSubject,
+    normalizedTimeText,
+  ].filter(Boolean).join('::');
+
+  if (!mailIdentity) {
+    return '';
+  }
+
+  return `${mailIdentity}::${normalizedCode}`;
+}
+
+function hasProcessedMailCode(entryKey) {
+  return Boolean(entryKey) && processedMailCodeEntries.has(entryKey);
+}
+
+function rememberProcessedMailCode(entryKey) {
+  if (!entryKey) {
+    return;
+  }
+  processedMailCodeEntries.add(entryKey);
+  persistProcessedMailCodeEntries();
+}
+
+function readOpenedMailBody() {
+  const frame = getOpenedMailBodyFrame();
+  if (!frame) {
+    return '';
+  }
+
+  try {
+    const frameDocument = frame.contentDocument || frame.contentWindow?.document;
+    return normalizeText(frameDocument?.body?.innerText || frameDocument?.body?.textContent || '');
+  } catch (err) {
+    console.warn(MAIL163_PREFIX, 'Could not read 163 mail iframe body:', err?.message || err);
+    return '';
+  }
+}
+
+async function waitForMailList(timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const items = findMailItems();
+    if (items.length > 0 && !isReadMode()) {
+      return items;
+    }
+    await sleep(200);
+  }
+  throw new Error('163 邮箱列表未在预期时间内恢复，请确认当前仍位于收件箱。');
+}
+
+async function waitForOpenedMailBody(timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const bodyText = readOpenedMailBody();
+    if (bodyText) {
+      return bodyText;
+    }
+    await sleep(200);
+  }
+  throw new Error('打开 163 邮件后未读取到正文内容，请确认读信页面已加载完成。');
+}
+
+async function returnToMailList(step) {
+  if (!isReadMode()) {
+    await waitForMailList(5000);
+    return;
+  }
+
+  const backButton = findReadBackButton();
+  if (backButton) {
+    simulateClick(backButton);
+  } else if (window.history.length > 1) {
+    window.history.back();
+  } else {
+    const inboxLink = document.querySelector('.nui-tree-item-text[title="收件箱"]');
+    if (inboxLink) {
+      simulateClick(inboxLink);
+    }
+  }
+
+  try {
+    await waitForMailList(10000);
+    return;
+  } catch (err) {
+    const inboxLink = document.querySelector('.nui-tree-item-text[title="收件箱"]');
+    if (inboxLink) {
+      log(`步骤 ${step}：返回邮件列表超时，尝试重新点击收件箱。`, 'warn');
+      simulateClick(inboxLink);
+      await waitForMailList(10000);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function openMailItemAndRead(item, step) {
+  const meta = getMailItemMetadata(item);
+  simulateClick(item);
+  await sleep(500);
+
+  let bodyText = '';
+  try {
+    bodyText = await waitForOpenedMailBody(10000);
+  } finally {
+    await returnToMailList(step);
+  }
+
+  return {
+    ...meta,
+    bodyText,
+    combinedText: normalizeText([meta.combinedText, bodyText].filter(Boolean).join(' ')),
+  };
 }
 
 // ============================================================
@@ -228,34 +440,66 @@ async function handlePollEmail(step, payload) {
 
       if (!useFallback && !shouldBypassOldSnapshot && existingMailIds.has(id)) continue;
 
-      const senderEl = item.querySelector('.nui-user');
-      const sender = senderEl ? senderEl.textContent.toLowerCase() : '';
-
-      const subjectEl = item.querySelector('span.da0');
-      const subject = subjectEl ? subjectEl.textContent : '';
-
-      const ariaLabel = (item.getAttribute('aria-label') || '').toLowerCase();
+      const meta = getMailItemMetadata(item);
+      const sender = meta.sender.toLowerCase();
+      const subject = meta.subject;
+      const ariaLabel = meta.ariaLabel.toLowerCase();
 
       const senderMatch = senderFilters.some(f => sender.includes(f.toLowerCase()) || ariaLabel.includes(f.toLowerCase()));
       const subjectMatch = subjectFilters.some(f => subject.toLowerCase().includes(f.toLowerCase()) || ariaLabel.includes(f.toLowerCase()));
 
       if (senderMatch || subjectMatch) {
-        const code = extractVerificationCode(subject + ' ' + ariaLabel);
-        if (code && excludedCodeSet.has(code)) {
-          log(`步骤 ${step}：跳过排除的验证码：${code}`, 'info');
-        } else if (code && !seenCodes.has(code)) {
-          seenCodes.add(code);
-          persistSeenCodes();
+        const previewCode = extractVerificationCode(meta.combinedText);
+        const previewEntryKey = buildProcessedMailCodeEntryKey({
+          mailId: id,
+          mailTimestamp,
+          code: previewCode,
+          meta,
+        });
+        if (previewCode && excludedCodeSet.has(previewCode)) {
+          log(`步骤 ${step}：跳过排除的验证码：${previewCode}`, 'info');
+        } else if (previewCode && !hasProcessedMailCode(previewEntryKey)) {
+          rememberProcessedMailCode(previewEntryKey);
           const source = useFallback && existingMailIds.has(id) ? '回退匹配邮件' : '新邮件';
           const timeLabel = mailTimestamp ? `，时间：${new Date(mailTimestamp).toLocaleString('zh-CN', { hour12: false })}` : '';
-          log(`步骤 ${step}：已找到验证码：${code}（来源：${source}${timeLabel}，主题：${subject.slice(0, 40)}）`, 'ok');
+          log(`步骤 ${step}：已找到验证码：${previewCode}（来源：${source}${timeLabel}，主题：${subject.slice(0, 40)}）`, 'ok');
 
           // Trigger cleanup only as a best-effort side effect.
           scheduleEmailCleanup(item, step);
 
-          return { ok: true, code, emailTimestamp: Date.now(), mailId: id };
-        } else if (code && seenCodes.has(code)) {
-          log(`步骤 ${step}：跳过已处理过的验证码：${code}`, 'info');
+          return { ok: true, code: previewCode, emailTimestamp: Date.now(), mailId: id };
+        } else if (previewCode && hasProcessedMailCode(previewEntryKey)) {
+          log(`步骤 ${step}：跳过已处理过的邮件验证码：${previewCode}`, 'info');
+          continue;
+        }
+
+        let openedMail = null;
+        try {
+          openedMail = await openMailItemAndRead(item, step);
+        } catch (err) {
+          log(`步骤 ${step}：读取匹配邮件正文失败：${err.message}`, 'warn');
+          continue;
+        }
+        const bodyCode = extractVerificationCode(openedMail.combinedText);
+        const bodyEntryKey = buildProcessedMailCodeEntryKey({
+          mailId: id,
+          mailTimestamp,
+          code: bodyCode,
+          meta: openedMail,
+        });
+        if (bodyCode && excludedCodeSet.has(bodyCode)) {
+          log(`步骤 ${step}：跳过排除的验证码：${bodyCode}`, 'info');
+        } else if (bodyCode && !hasProcessedMailCode(bodyEntryKey)) {
+          rememberProcessedMailCode(bodyEntryKey);
+          const source = useFallback && existingMailIds.has(id) ? '回退匹配邮件正文' : '新邮件正文';
+          const timeLabel = mailTimestamp ? `，时间：${new Date(mailTimestamp).toLocaleString('zh-CN', { hour12: false })}` : '';
+          log(`步骤 ${step}：已在邮件正文中找到验证码：${bodyCode}（来源：${source}${timeLabel}，主题：${subject.slice(0, 40)}）`, 'ok');
+
+          scheduleEmailCleanup(item, step);
+
+          return { ok: true, code: bodyCode, emailTimestamp: Date.now(), mailId: id };
+        } else if (bodyCode && hasProcessedMailCode(bodyEntryKey)) {
+          log(`步骤 ${step}：跳过已处理过的邮件验证码：${bodyCode}`, 'info');
         }
       }
     }

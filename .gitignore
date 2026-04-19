@@ -3,6 +3,7 @@
 /.github
 /_metadata/
 .vscode
+/_edge_test_profile/
 
 /data/account-run-history.txt
 /data/account-run-history.json

@@ -21,17 +21,18 @@
   function getActivationStrategy(target = {}) {
     const tagName = normalizeTagName(target.tagName);
     const type = normalizeType(target.type);
-    const pathname = normalizePathname(target.pathname);
     const hasForm = Boolean(target.hasForm);
-    const isEmailVerificationRoute = /\/email-verification(?:[/?#]|$)/i.test(pathname);
     const isSubmitButton = hasForm
       && (
         (tagName === 'button' && (!type || type === 'submit'))
         || (tagName === 'input' && type === 'submit')
       );
 
-    if (isSubmitButton && isEmailVerificationRoute) {
-      return { method: 'requestSubmit' };
+    // auth.openai.com/email-verification currently rejects raw POSTs without a
+    // route action. Keep generic button activation on normal click and use
+    // explicit requestSubmit only in the few call sites that truly require it.
+    if (isSubmitButton) {
+      return { method: 'click' };
     }
 
     return { method: 'click' };
